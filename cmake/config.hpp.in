@@ -1,0 +1,25 @@
+#pragma once
+
+/** \brief clapp's semantic-version major component. */
+#define CLAPP_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+/** \brief clapp's semantic-version minor component. */
+#define CLAPP_VERSION_MINOR @PROJECT_VERSION_MINOR@
+/** \brief clapp's semantic-version patch component. */
+#define CLAPP_VERSION_PATCH @PROJECT_VERSION_PATCH@
+/** \brief clapp's complete semantic-version string. */
+#define CLAPP_VERSION_STRING "@PROJECT_VERSION@"
+
+/** \brief Whether the compiler provides reflection in the experimental header. */
+#cmakedefine01 CLAPP_META_HEADER_EXPERIMENTAL
+/** \brief Whether the required static-reflection feature is available. */
+#cmakedefine01 CLAPP_HAS_REFLECTION
+/** \brief Whether reflection annotations are available. */
+#cmakedefine01 CLAPP_HAS_ANNOTATIONS
+/** \brief Whether expansion statements are available. */
+#cmakedefine01 CLAPP_HAS_EXPANSION_STATEMENTS
+// clang-format on
+
+#if !CLAPP_HAS_REFLECTION || !CLAPP_HAS_ANNOTATIONS || !CLAPP_HAS_EXPANSION_STATEMENTS
+#    error "clapp requires C++26 static reflection (P2996 + P3394 + P1306). \
+Use GCC 16+ with -freflection, or bloomberg/clang-p2996 with -freflection-latest."
+#endif

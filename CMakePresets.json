@@ -1,0 +1,448 @@
+{
+  "version": 10,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 3,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "_base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "_gcc",
+      "hidden": true,
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++-16"
+      }
+    },
+    {
+      "name": "_clang",
+      "hidden": true,
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "$env{CLAPP_CLANG_P2996}"
+      },
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{CLAPP_CLANG_P2996}",
+        "rhs": ""
+      }
+    },
+    {
+      "name": "_debug",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CLAPP_BUILD_TESTS": "ON",
+        "CLAPP_BUILD_EXAMPLES": "ON",
+        "CLAPP_BUILD_BENCHES": "ON",
+        "CLAPP_WERROR": "OFF"
+      }
+    },
+    {
+      "name": "_dev",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CLAPP_BUILD_TESTS": "ON",
+        "CLAPP_BUILD_EXAMPLES": "ON",
+        "CLAPP_BUILD_BENCHES": "OFF",
+        "CLAPP_WERROR": "ON"
+      }
+    },
+    {
+      "name": "_release",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CLAPP_BUILD_TESTS": "ON",
+        "CLAPP_BUILD_EXAMPLES": "ON",
+        "CLAPP_BUILD_BENCHES": "OFF",
+        "CLAPP_WERROR": "ON"
+      }
+    },
+    {
+      "name": "_asan",
+      "hidden": true,
+      "inherits": "_debug",
+      "cacheVariables": {
+        "CLAPP_SANITIZER": "address",
+        "CLAPP_WERROR": "ON"
+      }
+    },
+    {
+      "name": "_ubsan",
+      "hidden": true,
+      "inherits": "_debug",
+      "cacheVariables": {
+        "CLAPP_SANITIZER": "undefined",
+        "CLAPP_WERROR": "ON"
+      }
+    },
+    {
+      "name": "_tsan",
+      "hidden": true,
+      "inherits": "_debug",
+      "cacheVariables": {
+        "CLAPP_SANITIZER": "thread",
+        "CLAPP_WERROR": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug · GCC",
+      "description": "Debug symbols with tests, examples and benchmarks",
+      "inherits": [
+        "_gcc",
+        "_debug"
+      ]
+    },
+    {
+      "name": "dev",
+      "displayName": "Dev · GCC",
+      "description": "RelWithDebInfo development build with warnings as errors",
+      "inherits": [
+        "_gcc",
+        "_dev"
+      ]
+    },
+    {
+      "name": "release",
+      "displayName": "Release · GCC",
+      "description": "Optimized build with the complete test suite",
+      "inherits": [
+        "_gcc",
+        "_release"
+      ]
+    },
+    {
+      "name": "debug-clang",
+      "displayName": "Debug · clang-p2996",
+      "inherits": [
+        "_clang",
+        "_debug"
+      ]
+    },
+    {
+      "name": "dev-clang",
+      "displayName": "Dev · clang-p2996",
+      "inherits": [
+        "_clang",
+        "_dev"
+      ]
+    },
+    {
+      "name": "release-clang",
+      "displayName": "Release · clang-p2996",
+      "inherits": [
+        "_clang",
+        "_release"
+      ]
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug · AddressSanitizer",
+      "inherits": [
+        "_gcc",
+        "_asan"
+      ]
+    },
+    {
+      "name": "ubsan",
+      "displayName": "Debug · UndefinedBehaviorSanitizer",
+      "inherits": [
+        "_gcc",
+        "_ubsan"
+      ]
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug · ThreadSanitizer",
+      "description": "Linux-only ThreadSanitizer build",
+      "inherits": [
+        "_gcc",
+        "_tsan"
+      ]
+    },
+    {
+      "name": "bench",
+      "displayName": "Benchmark · GCC",
+      "inherits": "_gcc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CLAPP_BUILD_TESTS": "OFF",
+        "CLAPP_BUILD_EXAMPLES": "OFF",
+        "CLAPP_BUILD_BENCHES": "ON",
+        "CLAPP_WERROR": "ON"
+      }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Coverage · GCC",
+      "inherits": [
+        "_gcc",
+        "_debug"
+      ],
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "--coverage -fprofile-update=atomic",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug-clang",
+      "configurePreset": "debug-clang"
+    },
+    {
+      "name": "dev-clang",
+      "configurePreset": "dev-clang"
+    },
+    {
+      "name": "release-clang",
+      "configurePreset": "release-clang"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "ubsan",
+      "configurePreset": "ubsan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "bench",
+      "configurePreset": "bench"
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "_test",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "inherits": "_test"
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "inherits": "_test"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "inherits": "_test"
+    },
+    {
+      "name": "debug-clang",
+      "configurePreset": "debug-clang",
+      "inherits": "_test"
+    },
+    {
+      "name": "dev-clang",
+      "configurePreset": "dev-clang",
+      "inherits": "_test"
+    },
+    {
+      "name": "release-clang",
+      "configurePreset": "release-clang",
+      "inherits": "_test"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "inherits": "_test"
+    },
+    {
+      "name": "ubsan",
+      "configurePreset": "ubsan",
+      "inherits": "_test"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "inherits": "_test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "inherits": "_test"
+    },
+    {
+      "name": "units",
+      "displayName": "Dev unit tests",
+      "configurePreset": "dev",
+      "inherits": "_test",
+      "filter": {
+        "include": {
+          "label": "units"
+        }
+      }
+    },
+    {
+      "name": "e2e",
+      "displayName": "Dev end-to-end tests",
+      "configurePreset": "dev",
+      "inherits": "_test",
+      "filter": {
+        "include": {
+          "label": "e2e"
+        }
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "debug" },
+        { "type": "build", "name": "debug" },
+        { "type": "test", "name": "debug" }
+      ]
+    },
+    {
+      "name": "dev",
+      "displayName": "Dev: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build", "name": "dev" },
+        { "type": "test", "name": "dev" }
+      ]
+    },
+    {
+      "name": "release",
+      "displayName": "Release: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "release" },
+        { "type": "test", "name": "release" }
+      ]
+    },
+    {
+      "name": "debug-clang",
+      "displayName": "clang-p2996 Debug: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "debug-clang" },
+        { "type": "build", "name": "debug-clang" },
+        { "type": "test", "name": "debug-clang" }
+      ]
+    },
+    {
+      "name": "dev-clang",
+      "displayName": "clang-p2996 Dev: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "dev-clang" },
+        { "type": "build", "name": "dev-clang" },
+        { "type": "test", "name": "dev-clang" }
+      ]
+    },
+    {
+      "name": "release-clang",
+      "displayName": "clang-p2996 Release: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "release-clang" },
+        { "type": "build", "name": "release-clang" },
+        { "type": "test", "name": "release-clang" }
+      ]
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "asan" },
+        { "type": "build", "name": "asan" },
+        { "type": "test", "name": "asan" }
+      ]
+    },
+    {
+      "name": "ubsan",
+      "displayName": "UndefinedBehaviorSanitizer: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "ubsan" },
+        { "type": "build", "name": "ubsan" },
+        { "type": "test", "name": "ubsan" }
+      ]
+    },
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "tsan" },
+        { "type": "build", "name": "tsan" },
+        { "type": "test", "name": "tsan" }
+      ]
+    },
+    {
+      "name": "coverage",
+      "displayName": "Coverage: configure, build and test",
+      "steps": [
+        { "type": "configure", "name": "coverage" },
+        { "type": "build", "name": "coverage" },
+        { "type": "test", "name": "coverage" }
+      ]
+    },
+    {
+      "name": "bench",
+      "displayName": "Benchmark: configure and build",
+      "steps": [
+        { "type": "configure", "name": "bench" },
+        { "type": "build", "name": "bench" }
+      ]
+    }
+  ]
+}

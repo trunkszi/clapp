@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gcc:
+    name: GCC 16.1 · ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    container: gcc:16.1.0
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [ debug, dev, release, asan, ubsan, tsan ]
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: 4.3.x
+
+      - name: Install build prerequisites
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends ninja-build
+          ln -sf "$(command -v g++)" /usr/local/bin/g++-16
+          g++-16 --version
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          ctest --version
+
+      - name: Configure, build, and test
+        run: cmake --workflow --preset "${{ matrix.preset }}"
+
+  clang-p2996:
+    name: clang-p2996 (second implementation)
+    if: vars.CLAPP_CLANG_P2996_IMAGE != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ${{ vars.CLAPP_CLANG_P2996_IMAGE }}
+    env:
+      CLAPP_CLANG_P2996: ${{ vars.CLAPP_CLANG_P2996_BIN || '/usr/local/bin/clang++' }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: 4.3.x
+
+      - name: Install build prerequisites in the container
+        run: |
+          set -euxo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y --no-install-recommends ninja-build ca-certificates
+          fi
+          cmake --version
+
+      - name: Verify the image really provides a P2996 compiler
+        run: |
+          set -euo pipefail
+          if [ ! -x "${CLAPP_CLANG_P2996}" ]; then
+            echo "::error::CLAPP_CLANG_P2996=${CLAPP_CLANG_P2996} is not an executable in this image."
+            echo "Set the CLAPP_CLANG_P2996_BIN repository variable to the clang++ path inside ${{ vars.CLAPP_CLANG_P2996_IMAGE }}."
+            exit 1
+          fi
+          "${CLAPP_CLANG_P2996}" --version
+          cat > /tmp/probe.cpp <<'CPP'
+          #if __has_include(<meta>)
+          #  include <meta>
+          #elif __has_include(<experimental/meta>)
+          #  include <experimental/meta>
+          #else
+          #  error "no <meta> header: this is not a P2996 compiler"
+          #endif
+          constexpr auto r = ^^int;
+          static_assert(r == ^^int);
+          int main() { return 0; }
+          CPP
+          if ! "${CLAPP_CLANG_P2996}" -std=c++26 -freflection-latest -fsyntax-only /tmp/probe.cpp; then
+            echo "::error::${CLAPP_CLANG_P2996} does not support P2996 reflection (-freflection-latest + ^^int)."
+            echo "The image ${{ vars.CLAPP_CLANG_P2996_IMAGE }} is not a usable bloomberg/clang-p2996 build."
+            exit 1
+          fi
+          echo "P2996 reflection probe passed."
+
+      - name: Configure, build, and test
+        run: cmake --workflow --preset debug-clang

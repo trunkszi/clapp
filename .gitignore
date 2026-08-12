@@ -1,0 +1,14 @@
+build/
+/install/
+cmake-build-*/
+.gate-logs/
+
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+.DS_Store
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+.idea

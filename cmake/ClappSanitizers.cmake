@@ -1,0 +1,35 @@
+include_guard(GLOBAL)
+
+add_library(clapp_sanitizers INTERFACE)
+add_library(clapp::sanitizers ALIAS clapp_sanitizers)
+
+set(CLAPP_SANITIZER_FLAGS "" CACHE INTERNAL "sanitizer flags as a plain list")
+
+if(CLAPP_SANITIZER STREQUAL "none")
+    return()
+endif()
+
+if(MSVC)
+    if(CLAPP_SANITIZER STREQUAL "address")
+        target_compile_options(clapp_sanitizers INTERFACE /fsanitize=address)
+    else()
+        message(WARNING "clapp: MSVC only supports address sanitizer; ignoring CLAPP_SANITIZER=${CLAPP_SANITIZER}")
+    endif()
+    return()
+endif()
+
+set(_flags "")
+if(CLAPP_SANITIZER STREQUAL "address")
+    set(_flags -fsanitize=address -fno-omit-frame-pointer)
+elseif(CLAPP_SANITIZER STREQUAL "undefined")
+    set(_flags -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+elseif(CLAPP_SANITIZER STREQUAL "thread")
+    set(_flags -fsanitize=thread)
+else()
+    message(FATAL_ERROR "clapp: unknown CLAPP_SANITIZER value '${CLAPP_SANITIZER}' (choose none/address/undefined/thread)")
+endif()
+
+target_compile_options(clapp_sanitizers INTERFACE ${_flags})
+target_link_options(clapp_sanitizers    INTERFACE ${_flags})
+set(CLAPP_SANITIZER_FLAGS "${_flags}" CACHE INTERNAL "sanitizer flags as a plain list")
+message(STATUS "clapp: enabled ${CLAPP_SANITIZER} sanitizer")

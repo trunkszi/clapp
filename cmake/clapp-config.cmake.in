@@ -1,0 +1,29 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/clappTargets.cmake")
+
+set(CLAPP_HAS_REFLECTION            @CLAPP_HAS_REFLECTION@)
+set(CLAPP_HAS_ANNOTATIONS           @CLAPP_HAS_ANNOTATIONS@)
+set(CLAPP_HAS_EXPANSION_STATEMENTS  @CLAPP_HAS_EXPANSION_STATEMENTS@)
+set(CLAPP_REFLECTION_FLAGS         "@CLAPP_REFLECTION_FLAGS@")
+
+set(CLAPP_BUILT_WITH_COMPILER_ID      "@CMAKE_CXX_COMPILER_ID@")
+set(CLAPP_BUILT_WITH_COMPILER_VERSION "@CMAKE_CXX_COMPILER_VERSION@")
+
+if(NOT CLAPP_HAS_REFLECTION)
+    message(FATAL_ERROR
+        "clapp: this install records reflection as false, which means a tampered "
+        "install tree — clapp's build aborts without reflection and cannot produce such an install.")
+endif()
+
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL CLAPP_BUILT_WITH_COMPILER_ID)
+    message(WARNING
+        "clapp: this install was configured with ${CLAPP_BUILT_WITH_COMPILER_ID} "
+        "${CLAPP_BUILT_WITH_COMPILER_VERSION}, but you are building with "
+        "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}.\n"
+        "  clapp is header-only and its exported interface carries the reflection flag "
+        "'${CLAPP_REFLECTION_FLAGS}', whose spelling is compiler-specific.\n"
+        "  Re-install clapp with the compiler you intend to consume it with.")
+endif()
+
+check_required_components(clapp)
