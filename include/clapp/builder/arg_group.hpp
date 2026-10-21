@@ -141,6 +141,11 @@ namespace clapp {
         }
 
         /** \brief Rename the group. \param name The new unique name. */
+        constexpr group_builder &id(std::string_view name) & {
+            std::move(*this).id(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr group_builder &&id(std::string_view name) && {
             id_ = std::string{name};
             return std::move(*this);
@@ -150,6 +155,11 @@ namespace clapp {
          * \brief Add \p arg_id to the group.
          * \param arg_id The id of an argument (or of another group).
          */
+        constexpr group_builder &arg(std::string_view arg_id) & {
+            std::move(*this).arg(std::forward<decltype(arg_id)>(arg_id));
+            return *this;
+        }
+
         constexpr group_builder &&arg(std::string_view arg_id) && {
             args_.emplace_back(arg_id);
             return std::move(*this);
@@ -157,12 +167,23 @@ namespace clapp {
 
         /** \brief Add several members. */
         template<string_view_range R>
+        constexpr group_builder &args(R &&arg_ids) & {
+            std::move(*this).args(std::forward<decltype(arg_ids)>(arg_ids));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr group_builder &&args(R &&arg_ids) && {
             for (std::string_view member: arg_ids) args_.emplace_back(member);
             return std::move(*this);
         }
 
         /** \brief Add several members from a braced list. */
+        constexpr group_builder &args(std::initializer_list<std::string_view> arg_ids) & {
+            std::move(*this).args(std::forward<decltype(arg_ids)>(arg_ids));
+            return *this;
+        }
+
         constexpr group_builder &&args(std::initializer_list<std::string_view> arg_ids) && {
             return std::move(*this).args<std::initializer_list<std::string_view> &>(arg_ids);
         }
@@ -171,6 +192,11 @@ namespace clapp {
          * \brief Allow more than one member to appear.
          * \param yes `false` — the default — makes the members mutually exclusive.
          */
+        constexpr group_builder &multiple(bool yes = true) & {
+            std::move(*this).multiple(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr group_builder &&multiple(bool yes = true) && {
             multiple_ = yes;
             return std::move(*this);
@@ -184,12 +210,22 @@ namespace clapp {
          *       satisfiable by a conflicting rule elsewhere excusing it, which is why
          *       this is a group property rather than `required()` on every member.
          */
+        constexpr group_builder &required(bool yes = true) & {
+            std::move(*this).required(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr group_builder &&required(bool yes = true) && {
             required_ = yes;
             return std::move(*this);
         }
 
         /** \brief When any member is used, \p other becomes required. */
+        constexpr group_builder &requires_(std::string_view other) & {
+            std::move(*this).requires_(std::forward<decltype(other)>(other));
+            return *this;
+        }
+
         constexpr group_builder &&requires_(std::string_view other) && {
             requirements_.emplace_back(other);
             return std::move(*this);
@@ -197,17 +233,33 @@ namespace clapp {
 
         /** \brief When any member is used, every id in \p others becomes required. */
         template<string_view_range R>
+        constexpr group_builder &requires_all(R &&others) & {
+            std::move(*this).requires_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr group_builder &&requires_all(R &&others) && {
             for (std::string_view other: others) requirements_.emplace_back(other);
             return std::move(*this);
         }
 
         /** \brief `requires_all` from a braced list. */
+        constexpr group_builder &requires_all(std::initializer_list<std::string_view> others) & {
+            std::move(*this).requires_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
         constexpr group_builder &&requires_all(std::initializer_list<std::string_view> others) && {
             return std::move(*this).requires_all<std::initializer_list<std::string_view> &>(others);
         }
 
         /** \brief No member may appear alongside \p other. */
+        constexpr group_builder &conflicts_with(std::string_view other) & {
+            std::move(*this).conflicts_with(std::forward<decltype(other)>(other));
+            return *this;
+        }
+
         constexpr group_builder &&conflicts_with(std::string_view other) && {
             conflicts_.emplace_back(other);
             return std::move(*this);
@@ -215,12 +267,23 @@ namespace clapp {
 
         /** \brief No member may appear alongside any of \p others. */
         template<string_view_range R>
+        constexpr group_builder &conflicts_with_all(R &&others) & {
+            std::move(*this).conflicts_with_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr group_builder &&conflicts_with_all(R &&others) && {
             for (std::string_view other: others) conflicts_.emplace_back(other);
             return std::move(*this);
         }
 
         /** \brief `conflicts_with_all` from a braced list. */
+        constexpr group_builder &conflicts_with_all(std::initializer_list<std::string_view> others) & {
+            std::move(*this).conflicts_with_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
         constexpr group_builder &&
         conflicts_with_all(std::initializer_list<std::string_view> others) && {
             return std::move(*this).conflicts_with_all<std::initializer_list<std::string_view> &>(

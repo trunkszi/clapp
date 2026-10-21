@@ -16,6 +16,11 @@ clapp_add_unit_test(meta annotations)
 clapp_add_unit_test(meta deduce)
 clapp_add_unit_test(meta from_matches)
 clapp_add_unit_test(meta parse)
+clapp_add_unit_test(meta full_upgrade_store)
+clapp_add_unit_test(meta full_upgrade_derive)
+clapp_add_unit_test(parser full_upgrade_core)
+clapp_add_unit_test(builder full_upgrade_values)
+clapp_add_unit_test(output full_upgrade_complete)
 
 clapp_add_unit_test(lex os_str)
 clapp_add_unit_test(lex parsed_arg)
@@ -161,7 +166,13 @@ clapp_add_compile_fail_test(meta external_subcommand_alternative
         PATTERN_GNU "clapp::external_subcommand.* on a std::variant alternative is not implemented"
         PATTERN_CLANG "clapp::external_subcommand.* on a std::variant")
 
+clapp_add_compile_fail_test(meta cstr_capacity
+        PATTERN "clapp::cstr capacity exceeded")
+
 clapp_add_compile_fail_test(meta negative_control EXPECT compiles)
+
+clapp_add_compile_fail_test(builder enum_alias_collision
+        PATTERN "clapp: enum value names and aliases must be unique")
 
 clapp_add_compile_fail_test(builder action_num_args_conflict
         PATTERN_GNU "'mammal' has action 'set-true', which is incompatible with the num_args it was given"

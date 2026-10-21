@@ -8,11 +8,14 @@
 #include <clapp/error/context.hpp>
 #include <clapp/error/error_kind.hpp>
 #include <clapp/output/styled_str.hpp>
+#include <clapp/output/render.hpp>
 #include <clapp/output/textwrap.hpp>
 #include <clapp/util/flat_map.hpp>
 #include <clapp/util/str.hpp>
 
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>  // IWYU pragma: keep
 #include <optional>
 #include <ranges>
@@ -23,6 +26,8 @@
 #include <vector>
 
 namespace clapp {
+
+    struct command_spec;
 
     /** \brief How much of an error to render. clap's `ErrorFormatter` implementations. */
     enum class error_format : std::uint8_t {
@@ -211,6 +216,41 @@ namespace clapp {
         [[nodiscard]] constexpr styled_str render(error_format which = error_format::rich) const {
             return strip_escapes(render_undecorated(which));
         }
+
+        /** \brief Remember the output policy of the command that produced this outcome. */
+        constexpr error& set_output(styles palette, color_choice choice) noexcept {
+            styles_ = palette;
+            color_ = choice;
+            output_policy_bound_ = true;
+            return *this;
+        }
+
+        /** \brief Bind an originating command's policy, preserving an already-bound child. */
+        constexpr error& set_output_if_unset(styles palette, color_choice choice) noexcept {
+            if (!output_policy_bound_) set_output(palette, choice);
+            return *this;
+        }
+
+        /** \brief Render with the retained palette and the destination stream's color policy. */
+        [[nodiscard]] std::string render_ansi() const {
+            return render_for_stream(render(), styles_, color_, use_stderr() ? stderr : stdout);
+        }
+
+        /** \brief Print to stdout for help/version, otherwise stderr. */
+        void print() const {
+            const std::string bytes = render_ansi();
+            std::FILE* stream = use_stderr() ? stderr : stdout;
+            std::fwrite(bytes.data(), 1, bytes.size(), stream);
+            std::fflush(stream);
+        }
+        void print(const command_spec& spec) const;
+
+        /** \brief Print this outcome and terminate with its documented status. */
+        [[noreturn]] void exit() const {
+            print();
+            std::exit(exit_code());
+        }
+        [[noreturn]] void exit(const command_spec& spec) const;
 
     private:
         /** \brief render() before the escape strip. See render()'s \warning. */
@@ -1125,6 +1165,9 @@ namespace clapp {
             return true;
         }
 
+        bool output_policy_bound_ = false;
+        styles styles_ = styles::plain();
+        color_choice color_ = color_choice::auto_detect;
         error_kind kind_             = error_kind::unknown_argument;
         message_state message_state_ = message_state::none;
         // Explicit presence flags (trap 10): empty cause ≠ no cause.

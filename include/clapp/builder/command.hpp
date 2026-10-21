@@ -5,6 +5,9 @@
 
 #pragma once
 
+#include <clapp/error/error.hpp>
+#include <clapp/lex/raw_args.hpp>
+#include <clapp/parser/arg_matches.hpp>
 #include <clapp/builder/arg.hpp>
 #include <clapp/builder/arg_group.hpp>
 #include <clapp/builder/styling.hpp>
@@ -69,10 +72,11 @@ namespace clapp {
         color_auto, /**< Colour when the stream supports it. */
         color_always, /**< Colour unconditionally. */
         color_never, /**< Never colour. */
+        expand_args_from_files, /**< Expand @response files before parsing. */
     };
 
     /** \brief How many distinct clapp::command_setting values exist. */
-    inline constexpr std::size_t command_setting_count = 30;
+    inline constexpr std::size_t command_setting_count = 31;
 
     /** \brief Every clapp::command_setting, in bit order. Handy for exhaustive tests. */
     inline constexpr std::array<command_setting, command_setting_count> all_command_settings{
@@ -106,6 +110,7 @@ namespace clapp {
         command_setting::color_auto,
         command_setting::color_always,
         command_setting::color_never,
+        command_setting::expand_args_from_files,
     };
 
     /**
@@ -175,6 +180,8 @@ namespace clapp {
                 return "color_always";
             case command_setting::color_never:
                 return "color_never";
+            case command_setting::expand_args_from_files:
+                return "expand_args_from_files";
         }
         return "unknown";
     }
@@ -418,6 +425,20 @@ namespace clapp {
      * pointer+count layout; accessors return spans/optionals.
      */
     struct command_spec {
+        /** \brief Parse arguments with this frozen command. Definitions are in parser/parse.hpp. */
+        [[nodiscard]] std::expected<arg_matches, error> try_get_matches(const raw_args& raw) const;
+        [[nodiscard]] std::expected<arg_matches, error>
+        try_get_matches(int argc, const native_char* const* argv) const;
+        [[nodiscard]] std::expected<arg_matches, error> try_get_matches() const;
+        [[nodiscard]] arg_matches get_matches(const raw_args& raw) const;
+        [[nodiscard]] arg_matches get_matches(int argc, const native_char* const* argv) const;
+        [[nodiscard]] arg_matches get_matches() const;
+#if defined(_WIN32)
+        [[nodiscard]] std::expected<arg_matches, error>
+        try_get_matches(int argc, const char* const* argv) const;
+        [[nodiscard]] arg_matches get_matches(int argc, const char* const* argv) const;
+#endif
+
         /**
          * \name Identity
          * \{
@@ -984,6 +1005,10 @@ namespace clapp {
             return global_settings;
         }
 
+        [[nodiscard]] constexpr bool is_expand_args_from_files_set() const noexcept {
+            return is_set(command_setting::expand_args_from_files);
+        }
+
         /** \brief Reports clapp::command_builder::ignore_errors(). */
         [[nodiscard]] constexpr bool is_ignore_errors_set() const noexcept {
             return is_set(command_setting::ignore_errors);
@@ -1163,6 +1188,18 @@ namespace clapp {
     // command_builder — the builder
     // -----------------------------------------------------------------------------
 
+    inline void error::print(const command_spec& spec) const {
+        std::FILE* stream = use_stderr() ? stderr : stdout;
+        const std::string bytes = render_for_stream(render(), spec.get_styles(), spec.get_color(), stream);
+        std::fwrite(bytes.data(), 1, bytes.size(), stream);
+        std::fflush(stream);
+    }
+
+    [[noreturn]] inline void error::exit(const command_spec& spec) const {
+        print(spec);
+        std::exit(exit_code());
+    }
+
     /**
      * \brief Chainable description of a command tree (clap Command). Owns strings.
      * \warning Never `static constexpr` (holds vectors). Build in consteval and freeze().
@@ -1186,6 +1223,11 @@ namespace clapp {
          */
 
         /** \brief Rename the command. \param text The new name and id. */
+        constexpr command_builder &name(std::string_view text) & {
+            std::move(*this).name(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&name(std::string_view text) && {
             name_ = std::string{text};
             return std::move(*this);
@@ -1195,6 +1237,11 @@ namespace clapp {
          * \brief Set the executable name shown in usage.
          * \param text The name; an empty view resets it.
          */
+        constexpr command_builder &bin_name(std::string_view text) & {
+            std::move(*this).bin_name(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&bin_name(std::string_view text) && {
             bin_name_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1204,12 +1251,22 @@ namespace clapp {
          * \brief Set the name help displays, when it differs from the command's id.
          * \param text The display name; an empty view resets it.
          */
+        constexpr command_builder &display_name(std::string_view text) & {
+            std::move(*this).display_name(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&display_name(std::string_view text) && {
             display_name_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Set the `-V` version text. \param text The version; empty resets. */
+        constexpr command_builder &version(std::string_view text) & {
+            std::move(*this).version(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&version(std::string_view text) && {
             version_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1219,24 +1276,44 @@ namespace clapp {
          * \brief Set the `--version` text, when it is longer than the `-V` one.
          * \param text The long version; an empty view resets it.
          */
+        constexpr command_builder &long_version(std::string_view text) & {
+            std::move(*this).long_version(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&long_version(std::string_view text) && {
             long_version_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Set the author line. \param text The author; empty resets. */
+        constexpr command_builder &author(std::string_view text) & {
+            std::move(*this).author(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&author(std::string_view text) && {
             author_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Set the one-line description. \param text The blurb; empty resets. */
+        constexpr command_builder &about(std::string_view text) & {
+            std::move(*this).about(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&about(std::string_view text) && {
             about_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Set the `--help` description. \param text The prose; empty resets. */
+        constexpr command_builder &long_about(std::string_view text) & {
+            std::move(*this).long_about(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&long_about(std::string_view text) && {
             long_about_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1246,6 +1323,11 @@ namespace clapp {
          * \brief Set the `-C`-style flag that selects this subcommand.
          * \param letter The letter; `'\0'` removes it.
          */
+        constexpr command_builder &short_flag(char letter) & {
+            std::move(*this).short_flag(std::forward<decltype(letter)>(letter));
+            return *this;
+        }
+
         constexpr command_builder &&short_flag(char letter) && {
             short_flag_ = letter == '\0' ? std::nullopt : std::optional<char>{letter};
             return std::move(*this);
@@ -1255,24 +1337,45 @@ namespace clapp {
          * \brief Set the `--config`-style flag that selects this subcommand.
          * \param text The spelling without `--`; an empty view removes it.
          */
+        constexpr command_builder &long_flag(std::string_view text) & {
+            std::move(*this).long_flag(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&long_flag(std::string_view text) && {
             long_flag_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Add a hidden alternative command name. */
+        constexpr command_builder &alias(std::string_view text) & {
+            std::move(*this).alias(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&alias(std::string_view text) && {
             aliases_.push_back(arg_alias{.name = std::string{text}, .visible = false});
             return std::move(*this);
         }
 
         /** \brief Add a visible alternative command name — listed in help. */
+        constexpr command_builder &visible_alias(std::string_view text) & {
+            std::move(*this).visible_alias(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&visible_alias(std::string_view text) && {
             aliases_.push_back(arg_alias{.name = std::string{text}, .visible = true});
             return std::move(*this);
         }
 
         /** \brief Add several hidden command names. */
+        template<string_view_range R>
+        constexpr command_builder &aliases(R &&names) & {
+            std::move(*this).aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr command_builder &&aliases(R &&names) && {
             for (const std::string_view text: names)
@@ -1281,11 +1384,22 @@ namespace clapp {
         }
 
         /** \brief Add several hidden command names from a braced list. */
+        constexpr command_builder &aliases(std::initializer_list<std::string_view> names) & {
+            std::move(*this).aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr command_builder &&aliases(std::initializer_list<std::string_view> names) && {
             return std::move(*this).aliases<std::initializer_list<std::string_view> &>(names);
         }
 
         /** \brief Add several visible command names. */
+        template<string_view_range R>
+        constexpr command_builder &visible_aliases(R &&names) & {
+            std::move(*this).visible_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr command_builder &&visible_aliases(R &&names) && {
             for (const std::string_view text: names)
@@ -1294,6 +1408,11 @@ namespace clapp {
         }
 
         /** \brief Add several visible command names from a braced list. */
+        constexpr command_builder &visible_aliases(std::initializer_list<std::string_view> names) & {
+            std::move(*this).visible_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr command_builder &&
         visible_aliases(std::initializer_list<std::string_view> names) && {
             return std::move(*this).visible_aliases<std::initializer_list<std::string_view> &>(
@@ -1301,18 +1420,34 @@ namespace clapp {
         }
 
         /** \brief Add a hidden short-flag alias. */
+        constexpr command_builder &short_flag_alias(char letter) & {
+            std::move(*this).short_flag_alias(std::forward<decltype(letter)>(letter));
+            return *this;
+        }
+
         constexpr command_builder &&short_flag_alias(char letter) && {
             short_flag_aliases_.push_back(arg_short_alias{.name = letter, .visible = false});
             return std::move(*this);
         }
 
         /** \brief Add a visible short-flag alias. */
+        constexpr command_builder &visible_short_flag_alias(char letter) & {
+            std::move(*this).visible_short_flag_alias(std::forward<decltype(letter)>(letter));
+            return *this;
+        }
+
         constexpr command_builder &&visible_short_flag_alias(char letter) && {
             short_flag_aliases_.push_back(arg_short_alias{.name = letter, .visible = true});
             return std::move(*this);
         }
 
         /** \brief Add several hidden short-flag aliases. */
+        template<detail::char_range R>
+        constexpr command_builder &short_flag_aliases(R &&letters) & {
+            std::move(*this).short_flag_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         template<detail::char_range R>
         constexpr command_builder &&short_flag_aliases(R &&letters) && {
             for (const char letter: letters)
@@ -1321,11 +1456,22 @@ namespace clapp {
         }
 
         /** \brief Add several hidden short-flag aliases from a braced list. */
+        constexpr command_builder &short_flag_aliases(std::initializer_list<char> letters) & {
+            std::move(*this).short_flag_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         constexpr command_builder &&short_flag_aliases(std::initializer_list<char> letters) && {
             return std::move(*this).short_flag_aliases<std::initializer_list<char> &>(letters);
         }
 
         /** \brief Add several visible short-flag aliases. */
+        template<detail::char_range R>
+        constexpr command_builder &visible_short_flag_aliases(R &&letters) & {
+            std::move(*this).visible_short_flag_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         template<detail::char_range R>
         constexpr command_builder &&visible_short_flag_aliases(R &&letters) && {
             for (const char letter: letters)
@@ -1334,6 +1480,11 @@ namespace clapp {
         }
 
         /** \brief Add several visible short-flag aliases from a braced list. */
+        constexpr command_builder &visible_short_flag_aliases(std::initializer_list<char> letters) & {
+            std::move(*this).visible_short_flag_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         constexpr command_builder &&
         visible_short_flag_aliases(std::initializer_list<char> letters) && {
             return std::move(*this).visible_short_flag_aliases<std::initializer_list<char> &>(
@@ -1341,18 +1492,34 @@ namespace clapp {
         }
 
         /** \brief Add a hidden long-flag alias. */
+        constexpr command_builder &long_flag_alias(std::string_view text) & {
+            std::move(*this).long_flag_alias(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&long_flag_alias(std::string_view text) && {
             long_flag_aliases_.push_back(arg_alias{.name = std::string{text}, .visible = false});
             return std::move(*this);
         }
 
         /** \brief Add a visible long-flag alias. */
+        constexpr command_builder &visible_long_flag_alias(std::string_view text) & {
+            std::move(*this).visible_long_flag_alias(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&visible_long_flag_alias(std::string_view text) && {
             long_flag_aliases_.push_back(arg_alias{.name = std::string{text}, .visible = true});
             return std::move(*this);
         }
 
         /** \brief Add several hidden long-flag aliases. */
+        template<string_view_range R>
+        constexpr command_builder &long_flag_aliases(R &&names) & {
+            std::move(*this).long_flag_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr command_builder &&long_flag_aliases(R &&names) && {
             for (const std::string_view text: names)
@@ -1362,6 +1529,11 @@ namespace clapp {
         }
 
         /** \brief Add several hidden long-flag aliases from a braced list. */
+        constexpr command_builder &long_flag_aliases(std::initializer_list<std::string_view> names) & {
+            std::move(*this).long_flag_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr command_builder &&
         long_flag_aliases(std::initializer_list<std::string_view> names) && {
             return std::move(*this).long_flag_aliases<std::initializer_list<std::string_view> &>(
@@ -1370,6 +1542,12 @@ namespace clapp {
 
         /** \brief Add several visible long-flag aliases. */
         template<string_view_range R>
+        constexpr command_builder &visible_long_flag_aliases(R &&names) & {
+            std::move(*this).visible_long_flag_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr command_builder &&visible_long_flag_aliases(R &&names) && {
             for (const std::string_view text: names)
                 long_flag_aliases_.push_back(arg_alias{.name = std::string{text}, .visible = true});
@@ -1377,6 +1555,11 @@ namespace clapp {
         }
 
         /** \brief Add several visible long-flag aliases from a braced list. */
+        constexpr command_builder &visible_long_flag_aliases(std::initializer_list<std::string_view> names) & {
+            std::move(*this).visible_long_flag_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr command_builder &&
         visible_long_flag_aliases(std::initializer_list<std::string_view> names) && {
             return std::move(*this)
@@ -1396,6 +1579,11 @@ namespace clapp {
          * \warning Unset display_order uses get_configured_display_order(), not "== 999"
          *          (999 is a legal explicit key).
          */
+        constexpr command_builder &arg(arg_builder argument) & {
+            std::move(*this).arg(std::forward<decltype(argument)>(argument));
+            return *this;
+        }
+
         constexpr command_builder &&arg(arg_builder argument) && {
             if (help_heading_.has_value() && !argument.get_help_heading().has_value())
                 std::move(argument).help_heading(*help_heading_);
@@ -1415,18 +1603,35 @@ namespace clapp {
         /** \brief Add several arguments, in order. */
         template<std::ranges::input_range R>
             requires std::convertible_to<std::ranges::range_reference_t<R>, const arg_builder &>
+        constexpr command_builder &args(R &&arguments) & {
+            std::move(*this).args(std::forward<decltype(arguments)>(arguments));
+            return *this;
+        }
+
+        template<std::ranges::input_range R>
+            requires std::convertible_to<std::ranges::range_reference_t<R>, const arg_builder &>
         constexpr command_builder &&args(R &&arguments) && {
             for (const arg_builder &argument: arguments) std::move(*this).arg(argument);
             return std::move(*this);
         }
 
         /** \brief Add several arguments from a braced list. */
+        constexpr command_builder &args(std::initializer_list<arg_builder> arguments) & {
+            std::move(*this).args(std::forward<decltype(arguments)>(arguments));
+            return *this;
+        }
+
         constexpr command_builder &&args(std::initializer_list<arg_builder> arguments) && {
             for (const arg_builder &argument: arguments) std::move(*this).arg(argument);
             return std::move(*this);
         }
 
         /** \brief Add one argument group. */
+        constexpr command_builder &group(group_builder definition) & {
+            std::move(*this).group(std::forward<decltype(definition)>(definition));
+            return *this;
+        }
+
         constexpr command_builder &&group(group_builder definition) && {
             groups_.push_back(std::move(definition));
             return std::move(*this);
@@ -1435,12 +1640,24 @@ namespace clapp {
         /** \brief Add several argument groups, in order. */
         template<std::ranges::input_range R>
             requires std::convertible_to<std::ranges::range_reference_t<R>, const group_builder &>
+        constexpr command_builder &groups(R &&definitions) & {
+            std::move(*this).groups(std::forward<decltype(definitions)>(definitions));
+            return *this;
+        }
+
+        template<std::ranges::input_range R>
+            requires std::convertible_to<std::ranges::range_reference_t<R>, const group_builder &>
         constexpr command_builder &&groups(R &&definitions) && {
             for (const group_builder &definition: definitions) groups_.push_back(definition);
             return std::move(*this);
         }
 
         /** \brief Add several argument groups from a braced list. */
+        constexpr command_builder &groups(std::initializer_list<group_builder> definitions) & {
+            std::move(*this).groups(std::forward<decltype(definitions)>(definitions));
+            return *this;
+        }
+
         constexpr command_builder &&groups(std::initializer_list<group_builder> definitions) && {
             for (const group_builder &definition: definitions) groups_.push_back(definition);
             return std::move(*this);
@@ -1450,6 +1667,11 @@ namespace clapp {
          * \brief Add one subcommand (shares next_display_order cursor with arguments).
          * \note Injected help stays at 999 (bypasses this path).
          */
+        constexpr command_builder &subcommand(command_builder child) & {
+            std::move(*this).subcommand(std::forward<decltype(child)>(child));
+            return *this;
+        }
+
         constexpr command_builder &&subcommand(command_builder child) && {
             if (disp_ord_cursor_.has_value()) {
                 if (!child.disp_ord_.has_value()) child.disp_ord_ = disp_ord_cursor_;
@@ -1462,6 +1684,13 @@ namespace clapp {
         /** \brief Add several subcommands, in order. */
         template<std::ranges::input_range R>
             requires std::convertible_to<std::ranges::range_reference_t<R>, const command_builder &>
+        constexpr command_builder &subcommands(R &&children) & {
+            std::move(*this).subcommands(std::forward<decltype(children)>(children));
+            return *this;
+        }
+
+        template<std::ranges::input_range R>
+            requires std::convertible_to<std::ranges::range_reference_t<R>, const command_builder &>
         constexpr command_builder &&subcommands(R &&children) && {
             // Routed through subcommand() rather than pushed, so that the display-order
             // cursor advances. Pushing directly is how the args()/arg() pair used to
@@ -1471,6 +1700,11 @@ namespace clapp {
         }
 
         /** \brief Add several subcommands from a braced list. */
+        constexpr command_builder &subcommands(std::initializer_list<command_builder> children) & {
+            std::move(*this).subcommands(std::forward<decltype(children)>(children));
+            return *this;
+        }
+
         constexpr command_builder &&
         subcommands(std::initializer_list<command_builder> children) && {
             for (const command_builder &child: children) subcommands_.push_back(child);
@@ -1498,6 +1732,11 @@ namespace clapp {
          *       (see the length-sentinel note on clapp::arg_id), and freeze() runs
          *       entirely inside constant evaluation.
          */
+        constexpr command_builder &defer(command_builder (*transform)(command_builder)) & {
+            std::move(*this).defer(std::forward<decltype(transform)>(transform));
+            return *this;
+        }
+
         constexpr command_builder &&defer(command_builder (*transform)(command_builder)) && {
             deferred_ = transform;
             return std::move(*this);
@@ -1511,6 +1750,12 @@ namespace clapp {
          * \warning Must reject unknown ids here — freeze cannot catch a missed mut_arg
          *          (prepare may inject help/version after the fact).
          */
+        template<class F>
+        constexpr command_builder &mut_arg(std::string_view id, F &&transform) & {
+            std::move(*this).mut_arg(std::forward<decltype(id)>(id), std::forward<decltype(transform)>(transform));
+            return *this;
+        }
+
         template<class F>
         constexpr command_builder &&mut_arg(std::string_view id, F &&transform) && {
             const auto found = std::ranges::find_if(
@@ -1535,6 +1780,12 @@ namespace clapp {
          * \tparam F Callable taking an `arg_builder` by value and returning one.
          */
         template<class F>
+        constexpr command_builder &mut_args(F &&transform) & {
+            std::move(*this).mut_args(std::forward<decltype(transform)>(transform));
+            return *this;
+        }
+
+        template<class F>
         constexpr command_builder &&mut_args(F &&transform) && {
             for (arg_builder &candidate: args_) candidate = transform(std::move(candidate));
             return std::move(*this);
@@ -1546,6 +1797,12 @@ namespace clapp {
          * \warning Implicit groups from arg_builder::group() are not materialised yet;
          *          naming one is rejected (same as clap mut_group).
          */
+        template<class F>
+        constexpr command_builder &mut_group(std::string_view id, F &&transform) & {
+            std::move(*this).mut_group(std::forward<decltype(id)>(id), std::forward<decltype(transform)>(transform));
+            return *this;
+        }
+
         template<class F>
         constexpr command_builder &&mut_group(std::string_view id, F &&transform) && {
             const auto found = std::ranges::find_if(groups_, [id](const group_builder &candidate) {
@@ -1575,6 +1832,12 @@ namespace clapp {
          *       same lifecycle point as clap's `Command::mut_subcommand`.
          */
         template<class F>
+        constexpr command_builder &mut_subcommand(std::string_view sub_name, F &&transform) & {
+            std::move(*this).mut_subcommand(std::forward<decltype(sub_name)>(sub_name), std::forward<decltype(transform)>(transform));
+            return *this;
+        }
+
+        template<class F>
         constexpr command_builder &&mut_subcommand(std::string_view sub_name, F &&transform) && {
             const auto found = std::ranges::find_if(subcommands_,
                                                     [sub_name](const command_builder &candidate) {
@@ -1600,6 +1863,12 @@ namespace clapp {
          * \tparam F Callable taking a `command_builder` by value and returning one.
          */
         template<class F>
+        constexpr command_builder &mut_subcommands(F &&transform) & {
+            std::move(*this).mut_subcommands(std::forward<decltype(transform)>(transform));
+            return *this;
+        }
+
+        template<class F>
         constexpr command_builder &&mut_subcommands(F &&transform) && {
             for (command_builder &candidate: subcommands_)
                 candidate = transform(std::move(candidate));
@@ -1610,6 +1879,12 @@ namespace clapp {
          * \brief Parse the arguments of a captured external subcommand as \p T.
          * \tparam T The value type; also switches allow_external_subcommands() on.
          */
+        template<erasable_parsable T>
+        constexpr command_builder &external_subcommand_value_parser() & {
+            std::move(*this).external_subcommand_value_parser<T>();
+            return *this;
+        }
+
         template<erasable_parsable T>
         constexpr command_builder &&external_subcommand_value_parser() && {
             external_parser_ = parser_for<T>();
@@ -1622,6 +1897,11 @@ namespace clapp {
          * \warning Runtime null is stored (no null-guard under ubsan consteval) and
          *          operator== will dereference it. Use the nullptr overload to clear.
          */
+        constexpr command_builder &external_subcommand_value_parser(const parser_vtable *table) & {
+            std::move(*this).external_subcommand_value_parser(std::forward<decltype(table)>(table));
+            return *this;
+        }
+
         constexpr command_builder &&
         external_subcommand_value_parser(const parser_vtable *table) && {
             external_parser_ = table;
@@ -1635,6 +1915,11 @@ namespace clapp {
          *       UTF-8-validating — not raw bytes. See
          *       command_spec::get_external_subcommand_value_parser().
          */
+        constexpr command_builder &external_subcommand_value_parser(std::nullptr_t) & {
+            std::move(*this).external_subcommand_value_parser(nullptr);
+            return *this;
+        }
+
         constexpr command_builder &&external_subcommand_value_parser(std::nullptr_t) && {
             external_parser_.reset();
             return std::move(*this);
@@ -1651,6 +1936,11 @@ namespace clapp {
          * \brief Replace the generated usage line.
          * \param text The replacement; an empty view resets it.
          */
+        constexpr command_builder &override_usage(std::string_view text) & {
+            std::move(*this).override_usage(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&override_usage(std::string_view text) && {
             override_usage_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1660,6 +1950,11 @@ namespace clapp {
          * \brief Replace the entire generated help page.
          * \param text The replacement; an empty view resets it.
          */
+        constexpr command_builder &override_help(std::string_view text) & {
+            std::move(*this).override_help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&override_help(std::string_view text) && {
             override_help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1669,30 +1964,55 @@ namespace clapp {
          * \brief Set the help layout template.
          * \param text The template; an empty view resets it.
          */
+        constexpr command_builder &help_template(std::string_view text) & {
+            std::move(*this).help_template(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&help_template(std::string_view text) && {
             help_template_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Text printed before the help body. */
+        constexpr command_builder &before_help(std::string_view text) & {
+            std::move(*this).before_help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&before_help(std::string_view text) && {
             before_help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Text printed before the long help body. */
+        constexpr command_builder &before_long_help(std::string_view text) & {
+            std::move(*this).before_long_help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&before_long_help(std::string_view text) && {
             before_long_help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Text printed after the help body. */
+        constexpr command_builder &after_help(std::string_view text) & {
+            std::move(*this).after_help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&after_help(std::string_view text) && {
             after_help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Text printed after the long help body. */
+        constexpr command_builder &after_long_help(std::string_view text) & {
+            std::move(*this).after_long_help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&after_long_help(std::string_view text) && {
             after_long_help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1705,6 +2025,11 @@ namespace clapp {
          *          call, not to the ones already present. That is clap's behaviour and
          *          it is easy to misread as a whole-command setting.
          */
+        constexpr command_builder &next_help_heading(std::string_view text) & {
+            std::move(*this).next_help_heading(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&next_help_heading(std::string_view text) && {
             help_heading_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
@@ -1719,6 +2044,11 @@ namespace clapp {
          *       from "unset" and will be overwritten. clap distinguishes the two; the
          *       cost of matching it would be a second sentinel in clapp::arg_builder.
          */
+        constexpr command_builder &next_display_order(std::size_t order) & {
+            std::move(*this).next_display_order(std::forward<decltype(order)>(order));
+            return *this;
+        }
+
         constexpr command_builder &&next_display_order(std::size_t order) && {
             disp_ord_cursor_ = order;
             return std::move(*this);
@@ -1744,12 +2074,22 @@ namespace clapp {
          *       that the two spellings cannot drift apart. `std::nullopt` is the only
          *       value it accepts.
          */
+        constexpr command_builder &next_display_order(std::nullopt_t) & {
+            std::move(*this).next_display_order(std::nullopt);
+            return *this;
+        }
+
         constexpr command_builder &&next_display_order(std::nullopt_t) && {
             disp_ord_cursor_ = std::nullopt;
             return std::move(*this);
         }
 
         /** \brief Set this command's sort key among its siblings. */
+        constexpr command_builder &display_order(std::size_t order) & {
+            std::move(*this).display_order(std::forward<decltype(order)>(order));
+            return *this;
+        }
+
         constexpr command_builder &&display_order(std::size_t order) && {
             disp_ord_ = order;
             return std::move(*this);
@@ -1759,6 +2099,11 @@ namespace clapp {
          * \brief Wrap help at exactly \p width columns.
          * \param width The width; 0 resets to "detect the terminal".
          */
+        constexpr command_builder &term_width(std::size_t width) & {
+            std::move(*this).term_width(std::forward<decltype(width)>(width));
+            return *this;
+        }
+
         constexpr command_builder &&term_width(std::size_t width) && {
             term_width_ = width;
             return std::move(*this);
@@ -1768,18 +2113,33 @@ namespace clapp {
          * \brief Never wrap help wider than \p width columns.
          * \param width The bound; 0 resets to "no bound".
          */
+        constexpr command_builder &max_term_width(std::size_t width) & {
+            std::move(*this).max_term_width(std::forward<decltype(width)>(width));
+            return *this;
+        }
+
         constexpr command_builder &&max_term_width(std::size_t width) && {
             max_term_width_ = width;
             return std::move(*this);
         }
 
         /** \brief Set the placeholder used for the subcommand in usage. */
+        constexpr command_builder &subcommand_value_name(std::string_view text) & {
+            std::move(*this).subcommand_value_name(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&subcommand_value_name(std::string_view text) && {
             subcommand_value_name_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief Set the heading printed above the subcommand list. */
+        constexpr command_builder &subcommand_help_heading(std::string_view text) & {
+            std::move(*this).subcommand_help_heading(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr command_builder &&subcommand_help_heading(std::string_view text) && {
             subcommand_help_heading_ =
                     text.empty() ? std::nullopt : std::optional<std::string>{text};
@@ -1795,6 +2155,11 @@ namespace clapp {
          *       a CLI that honours `--color=never` only at the root is worse than one
          *       that does not honour it at all.
          */
+        constexpr command_builder &color(color_choice choice) & {
+            std::move(*this).color(std::forward<decltype(choice)>(choice));
+            return *this;
+        }
+
         constexpr command_builder &&color(color_choice choice) && {
             std::move(*this).unset_global_setting(command_setting::color_auto);
             std::move(*this).unset_global_setting(command_setting::color_always);
@@ -1811,6 +2176,11 @@ namespace clapp {
         }
 
         /** \brief Set the palette help and errors are rendered with. */
+        constexpr command_builder &styles(clapp::styles palette) & {
+            std::move(*this).styles(std::forward<decltype(palette)>(palette));
+            return *this;
+        }
+
         constexpr command_builder &&styles(clapp::styles palette) && {
             styles_ = palette;
             return std::move(*this);
@@ -1827,6 +2197,20 @@ namespace clapp {
          * \brief argv does not begin with the program name.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &expand_args_from_files(bool yes = true) & {
+            std::move(*this).expand_args_from_files(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
+        constexpr command_builder &&expand_args_from_files(bool yes = true) && {
+            return std::move(*this).global_flag(command_setting::expand_args_from_files, yes);
+        }
+
+        constexpr command_builder &no_binary_name(bool yes = true) & {
+            std::move(*this).no_binary_name(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&no_binary_name(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::no_binary_name, yes);
         }
@@ -1835,6 +2219,11 @@ namespace clapp {
          * \brief Keep parsing after an error instead of returning at once.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &ignore_errors(bool yes = true) & {
+            std::move(*this).ignore_errors(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&ignore_errors(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::ignore_errors, yes);
         }
@@ -1843,6 +2232,11 @@ namespace clapp {
          * \brief A repeated argument silently replaces its earlier occurrence.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &args_override_self(bool yes = true) & {
+            std::move(*this).args_override_self(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&args_override_self(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::all_args_override_self, yes);
         }
@@ -1851,6 +2245,11 @@ namespace clapp {
          * \brief Do not split delimited values that follow `--`.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &dont_delimit_trailing_values(bool yes = true) & {
+            std::move(*this).dont_delimit_trailing_values(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&dont_delimit_trailing_values(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::dont_delimit_trailing_values, yes);
         }
@@ -1859,6 +2258,11 @@ namespace clapp {
          * \brief Do not inject `-V` / `--version`.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &disable_version_flag(bool yes = true) & {
+            std::move(*this).disable_version_flag(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&disable_version_flag(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::disable_version_flag, yes);
         }
@@ -1868,6 +2272,11 @@ namespace clapp {
          * \note Global; see #global_flag(). Without that, the version stops one level
          *       down: `root -> mid -> leaf` would give `mid` a version and `leaf` none.
          */
+        constexpr command_builder &propagate_version(bool yes = true) & {
+            std::move(*this).propagate_version(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&propagate_version(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::propagate_version, yes);
         }
@@ -1876,6 +2285,11 @@ namespace clapp {
          * \brief Every argument's help starts on its own line.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &next_line_help(bool yes = true) & {
+            std::move(*this).next_line_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&next_line_help(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::next_line_help, yes);
         }
@@ -1884,6 +2298,11 @@ namespace clapp {
          * \brief Do not inject `-h` / `--help`.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &disable_help_flag(bool yes = true) & {
+            std::move(*this).disable_help_flag(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&disable_help_flag(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::disable_help_flag, yes);
         }
@@ -1892,6 +2311,11 @@ namespace clapp {
          * \brief Do not inject the `help` subcommand.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &disable_help_subcommand(bool yes = true) & {
+            std::move(*this).disable_help_subcommand(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&disable_help_subcommand(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::disable_help_subcommand, yes);
         }
@@ -1900,6 +2324,11 @@ namespace clapp {
          * \brief Render help without styling.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &disable_colored_help(bool yes = true) & {
+            std::move(*this).disable_colored_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&disable_colored_help(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::disable_colored_help, yes);
         }
@@ -1908,6 +2337,11 @@ namespace clapp {
          * \brief Require every argument to carry help text.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &help_expected(bool yes = true) & {
+            std::move(*this).help_expected(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&help_expected(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::help_expected, yes);
         }
@@ -1916,6 +2350,11 @@ namespace clapp {
          * \brief Suppress `[possible values: ...]` on every argument.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &hide_possible_values(bool yes = true) & {
+            std::move(*this).hide_possible_values(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&hide_possible_values(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::hide_possible_values, yes);
         }
@@ -1924,6 +2363,11 @@ namespace clapp {
          * \brief `--verb` may abbreviate `--verbose`.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &infer_long_args(bool yes = true) & {
+            std::move(*this).infer_long_args(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&infer_long_args(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::infer_long_args, yes);
         }
@@ -1932,51 +2376,101 @@ namespace clapp {
          * \brief `cl` may abbreviate the subcommand `clone`.
          * \note Global; see #global_flag().
          */
+        constexpr command_builder &infer_subcommands(bool yes = true) & {
+            std::move(*this).infer_subcommands(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&infer_subcommands(bool yes = true) && {
             return std::move(*this).global_flag(command_setting::infer_subcommands, yes);
         }
 
         /** \brief Render subcommand help inline instead of as a separate page. */
+        constexpr command_builder &flatten_help(bool yes = true) & {
+            std::move(*this).flatten_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&flatten_help(bool yes = true) && {
             return std::move(*this).setting(command_setting::flatten_help, yes);
         }
 
         /** \brief An empty command line prints help instead of parsing. */
+        constexpr command_builder &arg_required_else_help(bool yes = true) & {
+            std::move(*this).arg_required_else_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&arg_required_else_help(bool yes = true) && {
             return std::move(*this).setting(command_setting::arg_required_else_help, yes);
         }
 
         /** \brief Every value-taking argument accepts values starting with `-`. */
+        constexpr command_builder &allow_hyphen_values(bool yes = true) & {
+            std::move(*this).allow_hyphen_values(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&allow_hyphen_values(bool yes = true) && {
             return std::move(*this).setting(command_setting::allow_hyphen_values, yes);
         }
 
         /** \brief Every value-taking argument accepts negative numbers. */
+        constexpr command_builder &allow_negative_numbers(bool yes = true) & {
+            std::move(*this).allow_negative_numbers(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&allow_negative_numbers(bool yes = true) && {
             return std::move(*this).setting(command_setting::allow_negative_numbers, yes);
         }
 
         /** \brief The final positional swallows everything that follows. */
+        constexpr command_builder &trailing_var_arg(bool yes = true) & {
+            std::move(*this).trailing_var_arg(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&trailing_var_arg(bool yes = true) && {
             return std::move(*this).setting(command_setting::trailing_var_arg, yes);
         }
 
         /** \brief `prog [opt] <req>` may skip the optional positional. */
+        constexpr command_builder &allow_missing_positional(bool yes = true) & {
+            std::move(*this).allow_missing_positional(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&allow_missing_positional(bool yes = true) && {
             return std::move(*this).setting(command_setting::allow_missing_positional, yes);
         }
 
         /** \brief Omit this subcommand from the parent's help. */
+        constexpr command_builder &hide(bool yes = true) & {
+            std::move(*this).hide(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&hide(bool yes = true) && {
             return std::move(*this).setting(command_setting::hidden, yes);
         }
 
         /** \brief A subcommand must be given. */
+        constexpr command_builder &subcommand_required(bool yes = true) & {
+            std::move(*this).subcommand_required(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&subcommand_required(bool yes = true) && {
             return std::move(*this).setting(command_setting::subcommand_required, yes);
         }
 
         /** \brief Capture unknown subcommands instead of rejecting them. */
+        constexpr command_builder &allow_external_subcommands(bool yes = true) & {
+            std::move(*this).allow_external_subcommands(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&allow_external_subcommands(bool yes = true) && {
             return std::move(*this).setting(command_setting::allow_external_subcommands, yes);
         }
@@ -1985,16 +2479,31 @@ namespace clapp {
          * \brief Using an argument excuses the subcommand requirement.
          * \note Implies subcommand_negates_reqs(), which freeze() sets for you.
          */
+        constexpr command_builder &args_conflicts_with_subcommands(bool yes = true) & {
+            std::move(*this).args_conflicts_with_subcommands(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&args_conflicts_with_subcommands(bool yes = true) && {
             return std::move(*this).setting(command_setting::args_negate_subcommands, yes);
         }
 
         /** \brief A subcommand name wins over a value the parser was still collecting. */
+        constexpr command_builder &subcommand_precedence_over_arg(bool yes = true) & {
+            std::move(*this).subcommand_precedence_over_arg(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&subcommand_precedence_over_arg(bool yes = true) && {
             return std::move(*this).setting(command_setting::subcommand_precedence_over_arg, yes);
         }
 
         /** \brief Using a subcommand excuses this command's required arguments. */
+        constexpr command_builder &subcommand_negates_reqs(bool yes = true) & {
+            std::move(*this).subcommand_negates_reqs(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&subcommand_negates_reqs(bool yes = true) && {
             return std::move(*this).setting(command_setting::subcommands_negate_reqs, yes);
         }
@@ -2004,29 +2513,54 @@ namespace clapp {
          * \note Implies subcommand_required(), disable_help_flag() and
          *       disable_version_flag(), which freeze() sets for you.
          */
+        constexpr command_builder &multicall(bool yes = true) & {
+            std::move(*this).multicall(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr command_builder &&multicall(bool yes = true) && {
             return std::move(*this).setting(command_setting::multicall, yes);
         }
 
         /** \brief Turn \p setting on. */
+        constexpr command_builder &setting(command_setting setting) & {
+            std::move(*this).setting(std::forward<decltype(setting)>(setting));
+            return *this;
+        }
+
         constexpr command_builder &&setting(command_setting setting) && {
             settings_.set(setting);
             return std::move(*this);
         }
 
         /** \brief Turn \p setting on or off. */
+        constexpr command_builder &setting(command_setting setting, bool enable) & {
+            std::move(*this).setting(std::forward<decltype(setting)>(setting), std::forward<decltype(enable)>(enable));
+            return *this;
+        }
+
         constexpr command_builder &&setting(command_setting setting, bool enable) && {
             settings_.set(setting, enable);
             return std::move(*this);
         }
 
         /** \brief Turn \p setting off. */
+        constexpr command_builder &unset_setting(command_setting setting) & {
+            std::move(*this).unset_setting(std::forward<decltype(setting)>(setting));
+            return *this;
+        }
+
         constexpr command_builder &&unset_setting(command_setting setting) && {
             settings_.unset(setting);
             return std::move(*this);
         }
 
         /** \brief Turn \p setting on here **and** in every subcommand. */
+        constexpr command_builder &global_setting(command_setting setting) & {
+            std::move(*this).global_setting(std::forward<decltype(setting)>(setting));
+            return *this;
+        }
+
         constexpr command_builder &&global_setting(command_setting setting) && {
             settings_.set(setting);
             global_settings_.set(setting);
@@ -2034,6 +2568,11 @@ namespace clapp {
         }
 
         /** \brief Stop \p setting from being inherited, and turn it off here. */
+        constexpr command_builder &unset_global_setting(command_setting setting) & {
+            std::move(*this).unset_global_setting(std::forward<decltype(setting)>(setting));
+            return *this;
+        }
+
         constexpr command_builder &&unset_global_setting(command_setting setting) && {
             settings_.unset(setting);
             global_settings_.unset(setting);
@@ -2046,6 +2585,11 @@ namespace clapp {
          * \warning Use this (not #setting) for clap's global convenience setters —
          *          #setting alone would not propagate to subcommands.
          */
+        constexpr command_builder &global_flag(command_setting setting, bool enable) & {
+            std::move(*this).global_flag(std::forward<decltype(setting)>(setting), std::forward<decltype(enable)>(enable));
+            return *this;
+        }
+
         constexpr command_builder &&global_flag(command_setting setting, bool enable) && {
             return enable
                        ? std::move(*this).global_setting(setting)

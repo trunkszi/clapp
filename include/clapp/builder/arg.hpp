@@ -591,6 +591,7 @@ namespace clapp {
          *       absent vs present-but-empty differ only here.
          */
         bool help_heading_present = false;
+        bool reflected_default_value = false; /**< Opt-in derive initializer, usable by value predicates. */
         arg_id long_{}; /**< Empty: no long option. */
         const alias_spec *alias_data = nullptr; /**< Long aliases. */
         std::size_t alias_count = 0; /**< Number of long aliases. */
@@ -669,6 +670,8 @@ namespace clapp {
 
         /** \brief The seventeen boolean knobs. */
         arg_flags settings{};
+
+        [[nodiscard]] constexpr bool has_reflected_default_value() const noexcept { return reflected_default_value; }
 
         // -- identity -------------------------------------------------------------
 
@@ -1078,7 +1081,8 @@ namespace clapp {
                    get_long_help() == other.get_long_help() &&
                    get_help_heading() == other.get_help_heading() &&
                    detail::spans_equal(get_value_names(), other.get_value_names()) &&
-                   display_order == other.display_order && settings == other.settings;
+                   display_order == other.display_order && settings == other.settings &&
+                   reflected_default_value == other.reflected_default_value;
         }
     };
 
@@ -1105,6 +1109,11 @@ namespace clapp {
          */
 
         /** \brief Rename the argument. \param name The new unique name. */
+        constexpr arg_builder &id(std::string_view name) & {
+            std::move(*this).id(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr arg_builder &&id(std::string_view name) && {
             id_ = std::string{name};
             return std::move(*this);
@@ -1115,6 +1124,11 @@ namespace clapp {
          * \param letter The letter; `'\0'` removes the short option, which is clapp's
          *        spelling of clap's `IntoResettable::None`.
          */
+        constexpr arg_builder &short_(char letter) & {
+            std::move(*this).short_(std::forward<decltype(letter)>(letter));
+            return *this;
+        }
+
         constexpr arg_builder &&short_(char letter) && {
             short_name_ = letter == '\0' ? std::nullopt : std::optional<char>{letter};
             return std::move(*this);
@@ -1124,24 +1138,45 @@ namespace clapp {
          * \brief Set the long option spelling, e.g. `"verbose"` for `--verbose`.
          * \param name The spelling without `--`; an empty view removes it.
          */
+        constexpr arg_builder &long_(std::string_view name) & {
+            std::move(*this).long_(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr arg_builder &&long_(std::string_view name) && {
             long_name_ = name.empty() ? std::nullopt : std::optional<std::string>{name};
             return std::move(*this);
         }
 
         /** \brief Add a hidden long alias — accepted by the parser, absent from help. */
+        constexpr arg_builder &alias(std::string_view name) & {
+            std::move(*this).alias(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr arg_builder &&alias(std::string_view name) && {
             aliases_.push_back(arg_alias{.name = std::string{name}, .visible = false});
             return std::move(*this);
         }
 
         /** \brief Add a visible long alias — accepted *and* listed in help. */
+        constexpr arg_builder &visible_alias(std::string_view name) & {
+            std::move(*this).visible_alias(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr arg_builder &&visible_alias(std::string_view name) && {
             aliases_.push_back(arg_alias{.name = std::string{name}, .visible = true});
             return std::move(*this);
         }
 
         /** \brief Add several hidden long aliases. */
+        template<string_view_range R>
+        constexpr arg_builder &aliases(R &&names) & {
+            std::move(*this).aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr arg_builder &&aliases(R &&names) && {
             for (std::string_view name: names)
@@ -1150,11 +1185,22 @@ namespace clapp {
         }
 
         /** \brief Add several hidden long aliases from a braced list. */
+        constexpr arg_builder &aliases(std::initializer_list<std::string_view> names) & {
+            std::move(*this).aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr arg_builder &&aliases(std::initializer_list<std::string_view> names) && {
             return std::move(*this).aliases<std::initializer_list<std::string_view> &>(names);
         }
 
         /** \brief Add several visible long aliases. */
+        template<string_view_range R>
+        constexpr arg_builder &visible_aliases(R &&names) & {
+            std::move(*this).visible_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr arg_builder &&visible_aliases(R &&names) && {
             for (std::string_view name: names)
@@ -1163,24 +1209,45 @@ namespace clapp {
         }
 
         /** \brief Add several visible long aliases from a braced list. */
+        constexpr arg_builder &visible_aliases(std::initializer_list<std::string_view> names) & {
+            std::move(*this).visible_aliases(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr arg_builder &&visible_aliases(std::initializer_list<std::string_view> names) && {
             return std::move(*this).visible_aliases<std::initializer_list<std::string_view> &>(
                 names);
         }
 
         /** \brief Add a hidden short alias. */
+        constexpr arg_builder &short_alias(char letter) & {
+            std::move(*this).short_alias(std::forward<decltype(letter)>(letter));
+            return *this;
+        }
+
         constexpr arg_builder &&short_alias(char letter) && {
             short_aliases_.push_back(arg_short_alias{.name = letter, .visible = false});
             return std::move(*this);
         }
 
         /** \brief Add a visible short alias. */
+        constexpr arg_builder &visible_short_alias(char letter) & {
+            std::move(*this).visible_short_alias(std::forward<decltype(letter)>(letter));
+            return *this;
+        }
+
         constexpr arg_builder &&visible_short_alias(char letter) && {
             short_aliases_.push_back(arg_short_alias{.name = letter, .visible = true});
             return std::move(*this);
         }
 
         /** \brief Add several hidden short aliases. */
+        template<detail::char_range R>
+        constexpr arg_builder &short_aliases(R &&letters) & {
+            std::move(*this).short_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         template<detail::char_range R>
         constexpr arg_builder &&short_aliases(R &&letters) && {
             for (char letter: letters)
@@ -1189,11 +1256,22 @@ namespace clapp {
         }
 
         /** \brief Add several hidden short aliases from a braced list. */
+        constexpr arg_builder &short_aliases(std::initializer_list<char> letters) & {
+            std::move(*this).short_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         constexpr arg_builder &&short_aliases(std::initializer_list<char> letters) && {
             return std::move(*this).short_aliases<std::initializer_list<char> &>(letters);
         }
 
         /** \brief Add several visible short aliases. */
+        template<detail::char_range R>
+        constexpr arg_builder &visible_short_aliases(R &&letters) & {
+            std::move(*this).visible_short_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         template<detail::char_range R>
         constexpr arg_builder &&visible_short_aliases(R &&letters) && {
             for (char letter: letters)
@@ -1202,6 +1280,11 @@ namespace clapp {
         }
 
         /** \brief Add several visible short aliases from a braced list. */
+        constexpr arg_builder &visible_short_aliases(std::initializer_list<char> letters) & {
+            std::move(*this).visible_short_aliases(std::forward<decltype(letters)>(letters));
+            return *this;
+        }
+
         constexpr arg_builder &&visible_short_aliases(std::initializer_list<char> letters) && {
             return std::move(*this).visible_short_aliases<std::initializer_list<char> &>(letters);
         }
@@ -1212,6 +1295,11 @@ namespace clapp {
          * \note Only meaningful for positionals. freeze() rejects an index on an
          *       argument that also has a short or long option.
          */
+        constexpr arg_builder &index(std::size_t slot) & {
+            std::move(*this).index(std::forward<decltype(slot)>(slot));
+            return *this;
+        }
+
         constexpr arg_builder &&index(std::size_t slot) && {
             index_ = slot == 0 ? std::nullopt : std::optional<std::size_t>{slot};
             return std::move(*this);
@@ -1228,6 +1316,11 @@ namespace clapp {
          * \brief What happens when this argument matches.
          * \param act One of clapp::arg_action; arg_action::infer restores inference.
          */
+        constexpr arg_builder &action(arg_action act) & {
+            std::move(*this).action(std::forward<decltype(act)>(act));
+            return *this;
+        }
+
         constexpr arg_builder &&action(arg_action act) && {
             action_ = act == arg_action::infer ? std::nullopt : std::optional<arg_action>{act};
             return std::move(*this);
@@ -1237,12 +1330,22 @@ namespace clapp {
          * \brief How many values the argument consumes.
          * \param range value_range::infer() restores inference from the action.
          */
+        constexpr arg_builder &num_args(value_range range) & {
+            std::move(*this).num_args(std::forward<decltype(range)>(range));
+            return *this;
+        }
+
         constexpr arg_builder &&num_args(value_range range) && {
             num_vals_ = range.is_infer() ? std::nullopt : std::optional<value_range>{range};
             return std::move(*this);
         }
 
         /** \brief Consume exactly \p count values. clap's deprecated `number_of_values`. */
+        constexpr arg_builder &number_of_values(std::size_t count) & {
+            std::move(*this).number_of_values(std::forward<decltype(count)>(count));
+            return *this;
+        }
+
         constexpr arg_builder &&number_of_values(std::size_t count) && {
             return std::move(*this).num_args(value_range::exactly(count));
         }
@@ -1259,6 +1362,12 @@ namespace clapp {
          *       time keeps clapp::arg_spec free of type-id comparisons.
          */
         template<erasable_parsable T>
+        constexpr arg_builder &value_parser() & {
+            std::move(*this).value_parser<T>();
+            return *this;
+        }
+
+        template<erasable_parsable T>
         constexpr arg_builder &&value_parser() && {
             parser_ = parser_for<T>();
             if constexpr (std::same_as<T, std::filesystem::path>) {
@@ -1273,6 +1382,11 @@ namespace clapp {
          * \warning Runtime null is stored and later dereferenced. No guard: null compare
          *          breaks ubsan consteval. parser_for() never returns null.
          */
+        constexpr arg_builder &value_parser(const parser_vtable *table) & {
+            std::move(*this).value_parser(std::forward<decltype(table)>(table));
+            return *this;
+        }
+
         constexpr arg_builder &&value_parser(const parser_vtable *table) && {
             parser_ = table;
             return std::move(*this);
@@ -1283,6 +1397,11 @@ namespace clapp {
          * \note A separate overload rather than a null check inside the one above; see
          *       the warning there.
          */
+        constexpr arg_builder &value_parser(std::nullptr_t) & {
+            std::move(*this).value_parser(nullptr);
+            return *this;
+        }
+
         constexpr arg_builder &&value_parser(std::nullptr_t) && {
             parser_.reset();
             return std::move(*this);
@@ -1292,6 +1411,11 @@ namespace clapp {
          * \brief Name the single value placeholder shown in help and usage.
          * \note Replaces any previously configured placeholders, as in clap.
          */
+        constexpr arg_builder &value_name(std::string_view name) & {
+            std::move(*this).value_name(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr arg_builder &&value_name(std::string_view name) && {
             val_names_.clear();
             val_names_.emplace_back(name);
@@ -1304,6 +1428,12 @@ namespace clapp {
          *       was never set explicitly — clap's rule, applied in freeze().
          */
         template<string_view_range R>
+        constexpr arg_builder &value_names(R &&names) & {
+            std::move(*this).value_names(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&value_names(R &&names) && {
             val_names_.clear();
             for (std::string_view name: names) val_names_.emplace_back(name);
@@ -1311,11 +1441,21 @@ namespace clapp {
         }
 
         /** \brief Name several value placeholders from a braced list. */
+        constexpr arg_builder &value_names(std::initializer_list<std::string_view> names) & {
+            std::move(*this).value_names(std::forward<decltype(names)>(names));
+            return *this;
+        }
+
         constexpr arg_builder &&value_names(std::initializer_list<std::string_view> names) && {
             return std::move(*this).value_names<std::initializer_list<std::string_view> &>(names);
         }
 
         /** \brief Set the shell-completion hint. */
+        constexpr arg_builder &value_hint(clapp::value_hint kind) & {
+            std::move(*this).value_hint(std::forward<decltype(kind)>(kind));
+            return *this;
+        }
+
         constexpr arg_builder &&value_hint(clapp::value_hint kind) && {
             hint_ = kind;
             return std::move(*this);
@@ -1325,6 +1465,11 @@ namespace clapp {
          * \brief Stop collecting values at the sentinel token \p token.
          * \param token e.g. `";"`; an empty view removes the terminator.
          */
+        constexpr arg_builder &value_terminator(std::string_view token) & {
+            std::move(*this).value_terminator(std::forward<decltype(token)>(token));
+            return *this;
+        }
+
         constexpr arg_builder &&value_terminator(std::string_view token) && {
             terminator_ = token.empty() ? std::nullopt : std::optional<std::string>{token};
             return std::move(*this);
@@ -1337,6 +1482,11 @@ namespace clapp {
          * \note Implies `num_args(1..)` (only when the count was never set),
          *       `allow_hyphen_values(yes)` and `last(yes)` — clap's exact composition.
          */
+        constexpr arg_builder &raw(bool yes = true) & {
+            std::move(*this).raw(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&raw(bool yes = true) && {
             if (yes && !num_vals_.has_value()) num_vals_ = value_range::at_least(1);
             return std::move(*this).allow_hyphen_values(yes).last(yes);
@@ -1350,11 +1500,21 @@ namespace clapp {
          */
 
         /** \brief Require the argument to appear. */
+        constexpr arg_builder &required(bool yes = true) & {
+            std::move(*this).required(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&required(bool yes = true) && {
             return std::move(*this).setting(arg_setting::required, yes);
         }
 
         /** \brief When this argument appears, \p target becomes required too. */
+        constexpr arg_builder &requires_(std::string_view target) & {
+            std::move(*this).requires_(std::forward<decltype(target)>(target));
+            return *this;
+        }
+
         constexpr arg_builder &&requires_(std::string_view target) && {
             requirements_.push_back(arg_requirement{
                 .when = arg_condition::present(),
@@ -1364,6 +1524,12 @@ namespace clapp {
         }
 
         /** \brief When this argument appears, every id in \p targets becomes required. */
+        template<string_view_range R>
+        constexpr arg_builder &requires_all(R &&targets) & {
+            std::move(*this).requires_all(std::forward<decltype(targets)>(targets));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr arg_builder &&requires_all(R &&targets) && {
             for (std::string_view target: targets)
@@ -1375,6 +1541,11 @@ namespace clapp {
         }
 
         /** \brief `requires_all` from a braced list. */
+        constexpr arg_builder &requires_all(std::initializer_list<std::string_view> targets) & {
+            std::move(*this).requires_all(std::forward<decltype(targets)>(targets));
+            return *this;
+        }
+
         constexpr arg_builder &&requires_all(std::initializer_list<std::string_view> targets) && {
             return std::move(*this).requires_all<std::initializer_list<std::string_view> &>(targets);
         }
@@ -1383,6 +1554,11 @@ namespace clapp {
          * \brief When this argument's value equals \p value, \p target becomes required.
          * \note Argument order follows clap: the value comes first.
          */
+        constexpr arg_builder &requires_if(std::string_view value, std::string_view target) & {
+            std::move(*this).requires_if(std::forward<decltype(value)>(value), std::forward<decltype(target)>(target));
+            return *this;
+        }
+
         constexpr arg_builder &&requires_if(std::string_view value, std::string_view target) && {
             requirements_.push_back(arg_requirement{
                 .when = arg_condition::equal_to(value),
@@ -1392,6 +1568,12 @@ namespace clapp {
         }
 
         /** \brief Several `requires_if` rules, each a `(value, target)` pair. */
+        template<detail::string_pair_range R>
+        constexpr arg_builder &requires_ifs(R &&rules) & {
+            std::move(*this).requires_ifs(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         template<detail::string_pair_range R>
         constexpr arg_builder &&requires_ifs(R &&rules) && {
             for (std::pair<std::string_view, std::string_view> rule: rules)
@@ -1403,6 +1585,12 @@ namespace clapp {
         }
 
         /** \brief `requires_ifs` from a braced list. */
+        constexpr arg_builder &requires_ifs(
+            std::initializer_list<std::pair<std::string_view, std::string_view> > rules) & {
+            std::move(*this).requires_ifs(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         constexpr arg_builder &&requires_ifs(
             std::initializer_list<std::pair<std::string_view, std::string_view> > rules) && {
             return std::move(*this)
@@ -1412,6 +1600,11 @@ namespace clapp {
         }
 
         /** \brief This argument may not appear alongside \p other. */
+        constexpr arg_builder &conflicts_with(std::string_view other) & {
+            std::move(*this).conflicts_with(std::forward<decltype(other)>(other));
+            return *this;
+        }
+
         constexpr arg_builder &&conflicts_with(std::string_view other) && {
             conflicts_.emplace_back(other);
             return std::move(*this);
@@ -1419,12 +1612,23 @@ namespace clapp {
 
         /** \brief This argument may not appear alongside any of \p others. */
         template<string_view_range R>
+        constexpr arg_builder &conflicts_with_all(R &&others) & {
+            std::move(*this).conflicts_with_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&conflicts_with_all(R &&others) && {
             for (std::string_view other: others) conflicts_.emplace_back(other);
             return std::move(*this);
         }
 
         /** \brief `conflicts_with_all` from a braced list. */
+        constexpr arg_builder &conflicts_with_all(std::initializer_list<std::string_view> others) & {
+            std::move(*this).conflicts_with_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
         constexpr arg_builder &&
         conflicts_with_all(std::initializer_list<std::string_view> others) && {
             return std::move(*this).conflicts_with_all<std::initializer_list<std::string_view> &>(
@@ -1435,6 +1639,11 @@ namespace clapp {
          * \brief When both appear, this argument silently replaces \p other.
          * \note `overrides_with(own_id)` is clap's `args_override_self` idiom.
          */
+        constexpr arg_builder &overrides_with(std::string_view other) & {
+            std::move(*this).overrides_with(std::forward<decltype(other)>(other));
+            return *this;
+        }
+
         constexpr arg_builder &&overrides_with(std::string_view other) && {
             overrides_.emplace_back(other);
             return std::move(*this);
@@ -1442,12 +1651,23 @@ namespace clapp {
 
         /** \brief `overrides_with` for several ids. */
         template<string_view_range R>
+        constexpr arg_builder &overrides_with_all(R &&others) & {
+            std::move(*this).overrides_with_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&overrides_with_all(R &&others) && {
             for (std::string_view other: others) overrides_.emplace_back(other);
             return std::move(*this);
         }
 
         /** \brief `overrides_with_all` from a braced list. */
+        constexpr arg_builder &overrides_with_all(std::initializer_list<std::string_view> others) & {
+            std::move(*this).overrides_with_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
         constexpr arg_builder &&
         overrides_with_all(std::initializer_list<std::string_view> others) && {
             return std::move(*this).overrides_with_all<std::initializer_list<std::string_view> &>(
@@ -1458,6 +1678,11 @@ namespace clapp {
          * \brief This argument is required *unless* \p other is present.
          * \note Stacking calls means "unless **any** of them is present".
          */
+        constexpr arg_builder &required_unless_present(std::string_view other) & {
+            std::move(*this).required_unless_present(std::forward<decltype(other)>(other));
+            return *this;
+        }
+
         constexpr arg_builder &&required_unless_present(std::string_view other) && {
             r_unless_.emplace_back(other);
             return std::move(*this);
@@ -1465,12 +1690,23 @@ namespace clapp {
 
         /** \brief Required unless **any** of \p others is present. */
         template<string_view_range R>
+        constexpr arg_builder &required_unless_present_any(R &&others) & {
+            std::move(*this).required_unless_present_any(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&required_unless_present_any(R &&others) && {
             for (std::string_view other: others) r_unless_.emplace_back(other);
             return std::move(*this);
         }
 
         /** \brief `required_unless_present_any` from a braced list. */
+        constexpr arg_builder &required_unless_present_any(std::initializer_list<std::string_view> others) & {
+            std::move(*this).required_unless_present_any(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
         constexpr arg_builder &&
         required_unless_present_any(std::initializer_list<std::string_view> others) && {
             return std::move(*this)
@@ -1479,12 +1715,23 @@ namespace clapp {
 
         /** \brief Required unless **all** of \p others are present. */
         template<string_view_range R>
+        constexpr arg_builder &required_unless_present_all(R &&others) & {
+            std::move(*this).required_unless_present_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&required_unless_present_all(R &&others) && {
             for (std::string_view other: others) r_unless_all_.emplace_back(other);
             return std::move(*this);
         }
 
         /** \brief `required_unless_present_all` from a braced list. */
+        constexpr arg_builder &required_unless_present_all(std::initializer_list<std::string_view> others) & {
+            std::move(*this).required_unless_present_all(std::forward<decltype(others)>(others));
+            return *this;
+        }
+
         constexpr arg_builder &&
         required_unless_present_all(std::initializer_list<std::string_view> others) && {
             return std::move(*this)
@@ -1495,6 +1742,11 @@ namespace clapp {
          * \brief Required when \p other took the value \p value.
          * \note Stacking calls means "when **any** of them matches".
          */
+        constexpr arg_builder &required_if_eq(std::string_view other, std::string_view value) & {
+            std::move(*this).required_if_eq(std::forward<decltype(other)>(other), std::forward<decltype(value)>(value));
+            return *this;
+        }
+
         constexpr arg_builder &&required_if_eq(std::string_view other, std::string_view value) && {
             r_ifs_.push_back(
                 arg_value_requirement{.id = std::string{other}, .value = std::string{value}});
@@ -1502,6 +1754,12 @@ namespace clapp {
         }
 
         /** \brief Required when **any** `(id, value)` rule in \p rules matches. */
+        template<detail::string_pair_range R>
+        constexpr arg_builder &required_if_eq_any(R &&rules) & {
+            std::move(*this).required_if_eq_any(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         template<detail::string_pair_range R>
         constexpr arg_builder &&required_if_eq_any(R &&rules) && {
             for (std::pair<std::string_view, std::string_view> rule: rules)
@@ -1513,6 +1771,12 @@ namespace clapp {
         }
 
         /** \brief `required_if_eq_any` from a braced list. */
+        constexpr arg_builder &required_if_eq_any(
+            std::initializer_list<std::pair<std::string_view, std::string_view> > rules) & {
+            std::move(*this).required_if_eq_any(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         constexpr arg_builder &&required_if_eq_any(
             std::initializer_list<std::pair<std::string_view, std::string_view> > rules) && {
             return std::move(*this)
@@ -1522,6 +1786,12 @@ namespace clapp {
         }
 
         /** \brief Required when **every** `(id, value)` rule in \p rules matches. */
+        template<detail::string_pair_range R>
+        constexpr arg_builder &required_if_eq_all(R &&rules) & {
+            std::move(*this).required_if_eq_all(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         template<detail::string_pair_range R>
         constexpr arg_builder &&required_if_eq_all(R &&rules) && {
             for (std::pair<std::string_view, std::string_view> rule: rules)
@@ -1533,6 +1803,12 @@ namespace clapp {
         }
 
         /** \brief `required_if_eq_all` from a braced list. */
+        constexpr arg_builder &required_if_eq_all(
+            std::initializer_list<std::pair<std::string_view, std::string_view> > rules) & {
+            std::move(*this).required_if_eq_all(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         constexpr arg_builder &&required_if_eq_all(
             std::initializer_list<std::pair<std::string_view, std::string_view> > rules) && {
             return std::move(*this)
@@ -1542,11 +1818,21 @@ namespace clapp {
         }
 
         /** \brief This argument may not be combined with *any* other argument. */
+        constexpr arg_builder &exclusive(bool yes = true) & {
+            std::move(*this).exclusive(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&exclusive(bool yes = true) && {
             return std::move(*this).setting(arg_setting::exclusive, yes);
         }
 
         /** \brief Join the clapp::arg_group named \p group_id. */
+        constexpr arg_builder &group(std::string_view group_id) & {
+            std::move(*this).group(std::forward<decltype(group_id)>(group_id));
+            return *this;
+        }
+
         constexpr arg_builder &&group(std::string_view group_id) && {
             groups_.emplace_back(group_id);
             return std::move(*this);
@@ -1554,12 +1840,23 @@ namespace clapp {
 
         /** \brief Join several groups. */
         template<string_view_range R>
+        constexpr arg_builder &groups(R &&group_ids) & {
+            std::move(*this).groups(std::forward<decltype(group_ids)>(group_ids));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&groups(R &&group_ids) && {
             for (std::string_view group_id: group_ids) groups_.emplace_back(group_id);
             return std::move(*this);
         }
 
         /** \brief `groups` from a braced list. */
+        constexpr arg_builder &groups(std::initializer_list<std::string_view> group_ids) & {
+            std::move(*this).groups(std::forward<decltype(group_ids)>(group_ids));
+            return *this;
+        }
+
         constexpr arg_builder &&groups(std::initializer_list<std::string_view> group_ids) && {
             return std::move(*this).groups<std::initializer_list<std::string_view> &>(group_ids);
         }
@@ -1575,13 +1872,34 @@ namespace clapp {
          * \brief The value used when the argument never appears.
          * \note Replaces any previously configured defaults, as in clap.
          */
+        constexpr arg_builder &default_value(std::string_view value) & {
+            std::move(*this).default_value(std::forward<decltype(value)>(value));
+            return *this;
+        }
+
         constexpr arg_builder &&default_value(std::string_view value) && {
             default_vals_.clear();
             default_vals_.emplace_back(value);
             return std::move(*this);
         }
 
+        /** Mark an opt-in reflected member initializer without changing builder-default semantics. */
+        constexpr arg_builder& reflected_default_value(bool yes = true) & {
+            reflected_default_value_ = yes;
+            return *this;
+        }
+        constexpr arg_builder&& reflected_default_value(bool yes = true) && {
+            reflected_default_value_ = yes;
+            return std::move(*this);
+        }
+
         /** \brief Several values used when the argument never appears. */
+        template<string_view_range R>
+        constexpr arg_builder &default_values(R &&values) & {
+            std::move(*this).default_values(std::forward<decltype(values)>(values));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr arg_builder &&default_values(R &&values) && {
             default_vals_.clear();
@@ -1590,6 +1908,11 @@ namespace clapp {
         }
 
         /** \brief `default_values` from a braced list. */
+        constexpr arg_builder &default_values(std::initializer_list<std::string_view> values) & {
+            std::move(*this).default_values(std::forward<decltype(values)>(values));
+            return *this;
+        }
+
         constexpr arg_builder &&default_values(std::initializer_list<std::string_view> values) && {
             return std::move(*this).default_values<std::initializer_list<std::string_view> &>(
                 values);
@@ -1600,6 +1923,11 @@ namespace clapp {
          * \note Only reachable when `num_args` allows zero values, e.g.
          *       `num_args(value_range::optional())`.
          */
+        constexpr arg_builder &default_missing_value(std::string_view value) & {
+            std::move(*this).default_missing_value(std::forward<decltype(value)>(value));
+            return *this;
+        }
+
         constexpr arg_builder &&default_missing_value(std::string_view value) && {
             default_missing_vals_.clear();
             default_missing_vals_.emplace_back(value);
@@ -1608,6 +1936,12 @@ namespace clapp {
 
         /** \brief Several values used when the argument appears without its own. */
         template<string_view_range R>
+        constexpr arg_builder &default_missing_values(R &&values) & {
+            std::move(*this).default_missing_values(std::forward<decltype(values)>(values));
+            return *this;
+        }
+
+        template<string_view_range R>
         constexpr arg_builder &&default_missing_values(R &&values) && {
             default_missing_vals_.clear();
             for (std::string_view value: values) default_missing_vals_.emplace_back(value);
@@ -1615,6 +1949,11 @@ namespace clapp {
         }
 
         /** \brief `default_missing_values` from a braced list. */
+        constexpr arg_builder &default_missing_values(std::initializer_list<std::string_view> values) & {
+            std::move(*this).default_missing_values(std::forward<decltype(values)>(values));
+            return *this;
+        }
+
         constexpr arg_builder &&
         default_missing_values(std::initializer_list<std::string_view> values) && {
             return std::move(*this)
@@ -1631,6 +1970,13 @@ namespace clapp {
          * \note Rules are evaluated in declaration order and the first match wins,
          *       which is why `std::nullopt` is not the same as an empty list.
          */
+        constexpr arg_builder &default_value_if(std::string_view other,
+                                                 arg_condition when,
+                                                 std::optional<std::string_view> value) & {
+            std::move(*this).default_value_if(std::forward<decltype(other)>(other), std::forward<decltype(when)>(when), std::forward<decltype(value)>(value));
+            return *this;
+        }
+
         constexpr arg_builder &&default_value_if(std::string_view other,
                                                  arg_condition when,
                                                  std::optional<std::string_view> value) && {
@@ -1646,6 +1992,13 @@ namespace clapp {
         }
 
         /** \brief Use \p value as the default when \p other equals \p trigger. */
+        constexpr arg_builder &default_value_if(std::string_view other,
+                                                 std::string_view trigger,
+                                                 std::string_view value) & {
+            std::move(*this).default_value_if(std::forward<decltype(other)>(other), std::forward<decltype(trigger)>(trigger), std::forward<decltype(value)>(value));
+            return *this;
+        }
+
         constexpr arg_builder &&default_value_if(std::string_view other,
                                                  std::string_view trigger,
                                                  std::string_view value) && {
@@ -1655,6 +2008,12 @@ namespace clapp {
         }
 
         /** \brief Like default_value_if() but supplying several values. */
+        template<string_view_range R>
+        constexpr arg_builder &default_values_if(std::string_view other, arg_condition when, R &&values) & {
+            std::move(*this).default_values_if(std::forward<decltype(other)>(other), std::forward<decltype(when)>(when), std::forward<decltype(values)>(values));
+            return *this;
+        }
+
         template<string_view_range R>
         constexpr arg_builder &&
         default_values_if(std::string_view other, arg_condition when, R &&values) && {
@@ -1670,6 +2029,13 @@ namespace clapp {
         }
 
         /** \brief `default_values_if` from a braced list. */
+        constexpr arg_builder &default_values_if(std::string_view other,
+                          arg_condition when,
+                          std::initializer_list<std::string_view> values) & {
+            std::move(*this).default_values_if(std::forward<decltype(other)>(other), std::forward<decltype(when)>(when), std::forward<decltype(values)>(values));
+            return *this;
+        }
+
         constexpr arg_builder &&
         default_values_if(std::string_view other,
                           arg_condition when,
@@ -1679,6 +2045,12 @@ namespace clapp {
         }
 
         /** \brief Add several conditional-default rules at once. */
+        template<detail::default_value_rule_range R>
+        constexpr arg_builder &default_value_ifs(R &&rules) & {
+            std::move(*this).default_value_ifs(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         template<detail::default_value_rule_range R>
         constexpr arg_builder &&default_value_ifs(R &&rules) && {
             for (const default_value_rule &rule: rules) {
@@ -1695,6 +2067,11 @@ namespace clapp {
         }
 
         /** \brief `default_value_ifs` from a braced list. */
+        constexpr arg_builder &default_value_ifs(std::initializer_list<default_value_rule> rules) & {
+            std::move(*this).default_value_ifs(std::forward<decltype(rules)>(rules));
+            return *this;
+        }
+
         constexpr arg_builder &&
         default_value_ifs(std::initializer_list<default_value_rule> rules) && {
             return std::move(*this).default_value_ifs<std::initializer_list<default_value_rule> &>(
@@ -1705,6 +2082,11 @@ namespace clapp {
          * \brief Read the value from the environment variable \p name when absent.
          * \param name The variable name; an empty view removes it.
          */
+        constexpr arg_builder &env(std::string_view name) & {
+            std::move(*this).env(std::forward<decltype(name)>(name));
+            return *this;
+        }
+
         constexpr arg_builder &&env(std::string_view name) && {
             env_ = name.empty() ? std::nullopt : std::optional<std::string>{name};
             return std::move(*this);
@@ -1718,18 +2100,33 @@ namespace clapp {
          */
 
         /** \brief The one-line description shown beside the argument. */
+        constexpr arg_builder &help(std::string_view text) & {
+            std::move(*this).help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr arg_builder &&help(std::string_view text) && {
             help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief The longer description shown by `--help` but not `-h`. */
+        constexpr arg_builder &long_help(std::string_view text) & {
+            std::move(*this).long_help(std::forward<decltype(text)>(text));
+            return *this;
+        }
+
         constexpr arg_builder &&long_help(std::string_view text) && {
             long_help_ = text.empty() ? std::nullopt : std::optional<std::string>{text};
             return std::move(*this);
         }
 
         /** \brief The sort key within a help section. clap's default is 999. */
+        constexpr arg_builder &display_order(std::size_t order) & {
+            std::move(*this).display_order(std::forward<decltype(order)>(order));
+            return *this;
+        }
+
         constexpr arg_builder &&display_order(std::size_t order) && {
             disp_ord_ = order;
             return std::move(*this);
@@ -1739,47 +2136,92 @@ namespace clapp {
          * \brief Override the command help section; empty means no heading (not inherit).
          * \param heading Section title; empty = explicit none. Never calling inherits.
          */
+        constexpr arg_builder &help_heading(std::string_view heading) & {
+            std::move(*this).help_heading(std::forward<decltype(heading)>(heading));
+            return *this;
+        }
+
         constexpr arg_builder &&help_heading(std::string_view heading) && {
             help_heading_ = std::string{heading};
             return std::move(*this);
         }
 
         /** \brief Put the help text on the line below the argument. */
+        constexpr arg_builder &next_line_help(bool yes = true) & {
+            std::move(*this).next_line_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&next_line_help(bool yes = true) && {
             return std::move(*this).setting(arg_setting::next_line_help, yes);
         }
 
         /** \brief Omit the argument from every help output. */
+        constexpr arg_builder &hide(bool yes = true) & {
+            std::move(*this).hide(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hidden, yes);
         }
 
         /** \brief Suppress the `[possible values: ...]` line. */
+        constexpr arg_builder &hide_possible_values(bool yes = true) & {
+            std::move(*this).hide_possible_values(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide_possible_values(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hide_possible_values, yes);
         }
 
         /** \brief Suppress the `[default: ...]` line. */
+        constexpr arg_builder &hide_default_value(bool yes = true) & {
+            std::move(*this).hide_default_value(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide_default_value(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hide_default_value, yes);
         }
 
         /** \brief Suppress the `[env: NAME]` line. */
+        constexpr arg_builder &hide_env(bool yes = true) & {
+            std::move(*this).hide_env(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide_env(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hide_env, yes);
         }
 
         /** \brief Show `[env: NAME]` but not the variable's current value. */
+        constexpr arg_builder &hide_env_values(bool yes = true) & {
+            std::move(*this).hide_env_values(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide_env_values(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hide_env_values, yes);
         }
 
         /** \brief Hide from `-h`, keep in `--help`. */
+        constexpr arg_builder &hide_short_help(bool yes = true) & {
+            std::move(*this).hide_short_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide_short_help(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hidden_short_help, yes);
         }
 
         /** \brief Hide from `--help`, keep in `-h`. */
+        constexpr arg_builder &hide_long_help(bool yes = true) & {
+            std::move(*this).hide_long_help(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&hide_long_help(bool yes = true) && {
             return std::move(*this).setting(arg_setting::hidden_long_help, yes);
         }
@@ -1792,16 +2234,31 @@ namespace clapp {
          */
 
         /** \brief Allow a value to begin with `-`. */
+        constexpr arg_builder &allow_hyphen_values(bool yes = true) & {
+            std::move(*this).allow_hyphen_values(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&allow_hyphen_values(bool yes = true) && {
             return std::move(*this).setting(arg_setting::allow_hyphen_values, yes);
         }
 
         /** \brief Allow a value that looks like a negative number, but not a flag. */
+        constexpr arg_builder &allow_negative_numbers(bool yes = true) & {
+            std::move(*this).allow_negative_numbers(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&allow_negative_numbers(bool yes = true) && {
             return std::move(*this).setting(arg_setting::allow_negative_numbers, yes);
         }
 
         /** \brief Demand `--opt=value`; reject `--opt value`. */
+        constexpr arg_builder &require_equals(bool yes = true) & {
+            std::move(*this).require_equals(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&require_equals(bool yes = true) && {
             return std::move(*this).setting(arg_setting::require_equals, yes);
         }
@@ -1811,6 +2268,11 @@ namespace clapp {
          * \note clap deprecated this in favour of value_delimiter(); it is kept because
          *       the derive layer's `#[arg_builder(use_value_delimiter)]` still spells it so.
          */
+        constexpr arg_builder &use_value_delimiter(bool yes = true) & {
+            std::move(*this).use_value_delimiter(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&use_value_delimiter(bool yes = true) && {
             if (yes) {
                 if (!val_delim_.has_value()) val_delim_ = ',';
@@ -1821,27 +2283,52 @@ namespace clapp {
         }
 
         /** \brief Split each value on \p separator. `'\0'` stops splitting. */
+        constexpr arg_builder &value_delimiter(char separator) & {
+            std::move(*this).value_delimiter(std::forward<decltype(separator)>(separator));
+            return *this;
+        }
+
         constexpr arg_builder &&value_delimiter(char separator) && {
             val_delim_ = separator == '\0' ? std::nullopt : std::optional<char>{separator};
             return std::move(*this);
         }
 
         /** \brief Match possible values without regard to case. */
+        constexpr arg_builder &ignore_case(bool yes = true) & {
+            std::move(*this).ignore_case(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&ignore_case(bool yes = true) && {
             return std::move(*this).setting(arg_setting::ignore_case, yes);
         }
 
         /** \brief Treat everything from this argument onwards as its values. */
+        constexpr arg_builder &trailing_var_arg(bool yes = true) & {
+            std::move(*this).trailing_var_arg(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&trailing_var_arg(bool yes = true) && {
             return std::move(*this).setting(arg_setting::trailing_var_arg, yes);
         }
 
         /** \brief Only reachable after a `--` escape. */
+        constexpr arg_builder &last(bool yes = true) & {
+            std::move(*this).last(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&last(bool yes = true) && {
             return std::move(*this).setting(arg_setting::last, yes);
         }
 
         /** \brief Make the argument visible to every subcommand. */
+        constexpr arg_builder &global(bool yes = true) & {
+            std::move(*this).global(std::forward<decltype(yes)>(yes));
+            return *this;
+        }
+
         constexpr arg_builder &&global(bool yes = true) && {
             return std::move(*this).setting(arg_setting::global, yes);
         }
@@ -1854,18 +2341,33 @@ namespace clapp {
          */
 
         /** \brief Turn \p setting on. */
+        constexpr arg_builder &setting(arg_setting knob) & {
+            std::move(*this).setting(std::forward<decltype(knob)>(knob));
+            return *this;
+        }
+
         constexpr arg_builder &&setting(arg_setting knob) && {
             settings_.set(knob);
             return std::move(*this);
         }
 
         /** \brief Turn \p setting on or off. */
+        constexpr arg_builder &setting(arg_setting knob, bool enable) & {
+            std::move(*this).setting(std::forward<decltype(knob)>(knob), std::forward<decltype(enable)>(enable));
+            return *this;
+        }
+
         constexpr arg_builder &&setting(arg_setting knob, bool enable) && {
             settings_.set(knob, enable);
             return std::move(*this);
         }
 
         /** \brief Turn \p setting off. */
+        constexpr arg_builder &unset_setting(arg_setting knob) & {
+            std::move(*this).unset_setting(std::forward<decltype(knob)>(knob));
+            return *this;
+        }
+
         constexpr arg_builder &&unset_setting(arg_setting knob) && {
             settings_.unset(knob);
             return std::move(*this);
@@ -2280,6 +2782,7 @@ namespace clapp {
                 .id = make_static_id(id_),
                 .short_ = short_name_.value_or('\0'),
                 .help_heading_present = help_heading_.has_value(),
+                .reflected_default_value = reflected_default_value_,
                 .long_ = long_name_.has_value() ? make_static_id(*long_name_) : arg_id{},
                 .alias_data = aliases.data(),
                 .alias_count = aliases.size(),
@@ -2414,6 +2917,7 @@ namespace clapp {
         std::vector<std::string> val_names_;
         std::optional<value_range> num_vals_;
         std::optional<char> val_delim_;
+        bool reflected_default_value_ = false;
         std::vector<std::string> default_vals_;
         std::vector<arg_default_condition> default_vals_ifs_;
         std::vector<std::string> default_missing_vals_;

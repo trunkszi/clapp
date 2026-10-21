@@ -22,6 +22,10 @@
 #include <cstdlib>
 #include <expected>
 #include <optional>
+#include <limits>
+#include <memory>
+#include <cstdint>
+#include <tuple>
 #include <span>
 #include <string>
 #include <string_view>
@@ -195,8 +199,13 @@ namespace clapp {
          */
         [[nodiscard]] inline error
         element_parse_error(std::string_view id, os_str raw, const parse_error& why) {
+            if (why.has_possible_values()) {
+                std::vector<cow_str> accepted;
+                for (const auto name : why.visible_values()) accepted.push_back(cow_str::owned(name));
+                return error::invalid_value(cow_str::owned(id), cow_str{raw.to_string_lossy()}, std::move(accepted));
+            }
             return error::value_validation(
-                    cow_str::owned(id), cow_str::owned(raw.chars()), cow_str::owned(why.message()));
+                    cow_str::owned(id), cow_str{raw.to_string_lossy()}, cow_str::owned(why.message()));
         }
 
         // =====================================================================
@@ -297,6 +306,7 @@ namespace clapp {
             bool initializer_is_the_only_default = false;
 
             std::size_t arity = 0; /**< `deduced_arg::arity`. */
+            bool ignore_case = false;
         };
 
         // The command's clapp::naming is deliberately NOT a member of fill_context.
@@ -357,7 +367,14 @@ namespace clapp {
             if (!got.value().has_value()) return {};
             if (!wins_over_initializer(*ctx.matches, ctx.id, ctx.initializer_is_the_only_default))
                 return {};
-            field = static_cast<M>(got.value().value());
+            std::uintmax_t count = got.value().value();
+            if constexpr (sizeof(M) > 1) {
+                if (ctx.matches->value_source(ctx.id) == value_source::command_line) {
+                    count = std::max<std::uintmax_t>(count, ctx.matches->occurrences_of(ctx.id));
+                }
+            }
+            const auto maximum = static_cast<std::uintmax_t>(std::numeric_limits<M>::max());
+            field = static_cast<M>(std::min(count, maximum));
             return {};
         }
 
@@ -429,7 +446,10 @@ namespace clapp {
                 return {};
 
             M collected{};
-            for (const V& one : got.value().value()) collected.push_back(one);
+            for (const V& one : got.value().value()) {
+                if constexpr (requires { collected.push_back(one); }) collected.push_back(one);
+                else collected.insert(one);
+            }
             field = std::move(collected);
             return {};
         }
@@ -455,7 +475,10 @@ namespace clapp {
 
             Inner collected{};
             if (got.value().has_value()) {
-                for (const V& one : got.value().value()) collected.push_back(one);
+                for (const V& one : got.value().value()) {
+                if constexpr (requires { collected.push_back(one); }) collected.push_back(one);
+                else collected.insert(one);
+            }
             }
             field = std::move(collected);
             return {};
@@ -491,46 +514,56 @@ namespace clapp {
             return {};
         }
 
-        /**
-         * \brief `store_kind::pair` — `std::pair<A, B>`.
-         * \note Uses `try_get_raw` and re-parses each side (one arg_spec, two types).
-         *       Argument-level parser options (e.g. `ignore_case`) are not applied.
-         */
+        /** Parse heterogeneous product elements through the same case/choice policy as scalar arguments. */
+        template<class Element>
+        [[nodiscard]] std::expected<Element, error> parse_product_element(os_str raw, fill_context ctx) {
+            auto parsed = [&]() -> std::expected<Element, parse_error> {
+                if constexpr (requires { value_parser<Element>::parse_ignore_case(raw); }) {
+                    if (ctx.ignore_case) return value_parser<Element>::parse_ignore_case(raw);
+                }
+                return parse_value<Element>(raw, ctx.ignore_case);
+            }();
+            if (!parsed) {
+                auto why = parsed.error();
+                if constexpr (requires { value_parser<Element>::possible_values(); }) {
+                    if (!why.has_possible_values()) why.possible = value_parser<Element>::possible_values();
+                }
+                return std::unexpected(element_parse_error(ctx.id, raw, why));
+            }
+            return std::move(*parsed);
+        }
+
+        template<class M, std::size_t... Indices>
+        [[nodiscard]] std::expected<void, error> store_product(M& field, fill_context ctx,
+                                                              std::index_sequence<Indices...>) {
+            const auto got = ctx.matches->try_get_raw(ctx.id);
+            if (!got) return std::unexpected(matches_access_error(ctx.id, got.error()));
+            if (!*got) {
+                if (ctx.mode == fill_mode::construct && ctx.required)
+                    return std::unexpected(missing_required_error(ctx.id));
+                return {};
+            }
+            const auto raw = **got;
+            if (raw.size() != sizeof...(Indices))
+                return std::unexpected(arity_error(ctx.id, sizeof...(Indices), raw.size()));
+            if (!wins_over_initializer(*ctx.matches, ctx.id, ctx.initializer_is_the_only_default)) return {};
+            std::tuple<std::optional<std::tuple_element_t<Indices, M>>...> collected;
+            std::optional<error> failure;
+            ([&] {
+                if (failure) return;
+                using Element = std::tuple_element_t<Indices, M>;
+                auto parsed = parse_product_element<Element>(raw[Indices].view(), ctx);
+                if (!parsed) failure = std::move(parsed.error());
+                else std::get<Indices>(collected) = std::move(*parsed);
+            }(), ...);
+            if (failure) return std::unexpected(std::move(*failure));
+            field = M{std::move(*std::get<Indices>(collected))...};
+            return {};
+        }
+
         template<class M>
         [[nodiscard]] std::expected<void, error> store_pair(M& field, fill_context ctx) {
-            using A = [:meta::pair_types_of(^^M)[0]:];
-            using B = [:meta::pair_types_of(^^M)[1]:];
-
-            const std::expected<std::optional<std::span<const os_string>>, matches_error> got =
-                    ctx.matches->try_get_raw(ctx.id);
-            if (!got.has_value()) {
-                return std::unexpected(matches_access_error(ctx.id, got.error()));
-            }
-            if (!got.value().has_value()) {
-                if (ctx.mode == fill_mode::construct && ctx.required) {
-                    return std::unexpected(missing_required_error(ctx.id));
-                }
-                return {};
-            }
-
-            const std::span<const os_string> raw = got.value().value();
-            if (raw.size() != 2) {
-                return std::unexpected(arity_error(ctx.id, 2, raw.size()));
-            }
-            if (!wins_over_initializer(*ctx.matches, ctx.id, ctx.initializer_is_the_only_default))
-                return {};
-
-            const std::expected<A, parse_error> first = value_parser<A>::parse(raw[0].view());
-            if (!first.has_value()) {
-                return std::unexpected(element_parse_error(ctx.id, raw[0].view(), first.error()));
-            }
-            const std::expected<B, parse_error> second = value_parser<B>::parse(raw[1].view());
-            if (!second.has_value()) {
-                return std::unexpected(element_parse_error(ctx.id, raw[1].view(), second.error()));
-            }
-
-            field = M{first.value(), second.value()};
-            return {};
+            return store_product(field, ctx, std::make_index_sequence<std::tuple_size_v<M>>{});
         }
 
         /**
@@ -559,6 +592,7 @@ namespace clapp {
                           meta::variant_traits<V>::reflections) {
                 if (!matched) {
                     using alternative_type = [:alternative:];
+                    if constexpr (!meta::has_annotation<external_subcommand>(alternative)) {
                     if (name == meta::subcommand_name_of(alternative, Style)) {
                         matched = true;
                         // The alternative opens a NEW command level, so its own
@@ -582,6 +616,45 @@ namespace clapp {
                             else
                                 out = V(std::in_place_type<alternative_type>, std::move(fresh));
                         }
+                    }
+                    }
+                }
+            }
+
+            template for (constexpr std::meta::info alternative : meta::variant_traits<V>::reflections) {
+                if constexpr (meta::has_annotation<external_subcommand>(alternative)) {
+                    if (!matched) {
+                        using Alternative = [:alternative:];
+                        Alternative fresh{};
+                        Alternative* target = &fresh;
+                        if (ctx.mode == fill_mode::update && std::holds_alternative<Alternative>(out))
+                            target = std::addressof(std::get<Alternative>(out));
+                        static constexpr auto fields = std::define_static_array([] consteval {
+                            std::vector<std::meta::info> result;
+                            for (auto member : std::meta::nonstatic_data_members_of(alternative,
+                                                std::meta::access_context::current())) {
+                                if (!meta::has_annotation<skip>(member)) result.push_back(member);
+                            }
+                            return result;
+                        }());
+                        template for (constexpr auto member : fields) {
+                            using MemberType = [:std::meta::type_of(member):];
+                            if constexpr (meta::is_vector(^^MemberType)) {
+                                using Element = typename MemberType::value_type;
+                                (*target).[:member:].clear();
+                                if constexpr (fields.size() == 1) (*target).[:member:].emplace_back(name);
+                                auto values = read_many<Element>(sub, "");
+                                if (!values) failure = std::move(values.error());
+                                else if (*values) {
+                                    for (const auto& value : **values) (*target).[:member:].push_back(value);
+                                }
+                            } else {
+                                (*target).[:member:] = MemberType(name);
+                            }
+                        }
+                        if (!failure && target == &fresh)
+                            out = V(std::in_place_type<Alternative>, std::move(fresh));
+                        matched = true;
                     }
                 }
             }
@@ -673,7 +746,10 @@ namespace clapp {
                     // clapp::detail::derive_arg() reads, so the two directions cannot
                     // disagree about which channel the user used.
                     constexpr bool wrote_default_value =
-                            !meta::annotation_or<arg_attr>(member).default_value.empty();
+                            !meta::annotation_or<arg_attr>(member).default_value.empty() ||
+                            !meta::annotations_all_of<default_value_if>(member).empty() ||
+                            meta::annotation_or<arg_attr>(member).auto_default_value ||
+                            meta::annotation_or<command_attr>(^^T).auto_default_value;
 
                     const fill_context ctx{
                             .matches  = &matches,
@@ -683,6 +759,7 @@ namespace clapp {
                             .initializer_is_the_only_default =
                                     meta::has_member_initializer(member) && !wrote_default_value,
                             .arity = deduced.arity,
+                            .ignore_case = meta::annotation_or<arg_attr>(member).ignore_case,
                     };
 
                     std::expected<void, error> outcome;
@@ -720,7 +797,7 @@ namespace clapp {
                     } else if constexpr (deduced.store == store_kind::fixed) {
                         outcome = store_fixed(out.[:member:], ctx);
                     } else {
-                        static_assert(deduced.store == store_kind::pair,
+                        static_assert(deduced.store == store_kind::pair || deduced.store == store_kind::tuple,
                                       "clapp: a clapp::store_kind was added without a "
                                       "store-back branch in from_matches.hpp.");
                         outcome = store_pair(out.[:member:], ctx);
@@ -829,6 +906,7 @@ namespace clapp {
                 case store_kind::optional_many:
                 case store_kind::fixed:
                 case store_kind::pair:
+                case store_kind::tuple:
                     break;
                 default:
                     return false;

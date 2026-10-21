@@ -250,7 +250,8 @@ namespace {
 
     static_assert(clapp::all_color_choices.size() == 3);
     static_assert(std::meta::enumerators_of(^^clapp::color_choice).size() ==
-                  clapp::all_color_choices.size());
+                  clapp::all_color_choices.size() + 1);
+    static_assert(color_choice::auto_detect == color_choice::auto_);
 
     // auto_ is enumerator zero, matching clap's `#[default] Auto`.
     static_assert(color_choice{} == color_choice::auto_);

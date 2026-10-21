@@ -6,10 +6,12 @@
 #pragma once
 
 #include <clapp/detail/std_meta.hpp>
+#include <clapp/builder/value_range.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <ranges>
 #include <string_view>
@@ -47,9 +49,9 @@ namespace clapp {
          *       `.help = "..."` conversion. Pinned by `dsl_ergonomics_hold`.
          */
         template<std::size_t N>
-            requires(N <= Cap + 1)
         consteval cstr(const char (&literal)[N]) : length(N - 1) {
-            std::ranges::copy(literal | std::views::take(N - 1), chars);
+            static_assert(N <= Cap + 1, "clapp::cstr capacity exceeded: increase the annotation string capacity");
+            if constexpr (N <= Cap + 1) std::ranges::copy(literal | std::views::take(N - 1), chars);
         }
 
         /** \brief Return the maximum payload length. */
@@ -137,6 +139,14 @@ namespace clapp {
         email_address,          /**< An email address. */
     };
 
+    /** Color output policy shared by the annotation and output layers. */
+    enum class color_choice : std::uint8_t {
+        auto_,
+        always,
+        never,
+        auto_detect = auto_,
+    };
+
     /**
      * \brief Command-level annotation. Attach to a struct or class.
      *        Counterpart of clap's `#[command(...)]`.
@@ -156,9 +166,7 @@ namespace clapp {
 
         /**
          * \brief clap's `#[command(rename_all_env)]`.
-         * \warning **Recorded and never read.** `derive_arg()` does not derive env
-         *          names; no bare `.env` spelling exists. Kept for designated-init
-         *          member order; removing it is source-breaking.
+         * Used by auto_env to derive names, before adding env_prefix.
          */
         naming rename_all_env = naming::screaming_snake;
 
@@ -171,6 +179,30 @@ namespace clapp {
         bool multicall = false; /**< Interpret the executable name as a subcommand selector. */
         bool disable_help_flag    = false; /**< Omit the generated help flag. */
         bool disable_version_flag = false; /**< Omit the generated version flag. */
+        cstr<64> alias{};
+        cstr<64> visible_alias{};
+        char short_flag = '\0';
+        cstr<64> long_flag{};
+        cstr<128> long_version{};
+        cstr<64> display_name{};
+        cstr<64> bin_name{};
+        bool subcommands_negate_reqs = false;
+        bool args_negate_subcommands = false;
+        bool subcommand_precedence_over_arg = false;
+        bool allow_missing_positional = false;
+        bool trailing_var_arg = false;
+        bool dont_delimit_trailing_values = false;
+        bool all_args_override_self = false;
+        bool flatten_help = false;
+        bool next_line_help = false;
+        color_choice color = color_choice::auto_detect;
+        bool styled = false;
+        std::size_t term_width = 0;
+        std::size_t max_term_width = 0;
+        bool auto_default_value = false;
+        cstr<64> env_prefix{};
+        bool auto_env = false;
+        bool expand_args_from_files = false;
     };
 
     /**
@@ -223,8 +255,8 @@ namespace clapp {
         /**
          * \brief Value when absent (clap's `#[arg(default_value)]`).
          * \warning **Outranks a default member initializer on the same field.**
-         *          Annotation is the only compile-time-readable channel (help +
-         *          `required`); when both are set, the annotation wins.
+         *          Explicit annotation defaults win over auto_default_value
+         *          reflection of the initializer.
          * \note Only a user-written annotation wins. Parser-injected defaults
          *       (e.g. `"false"` for absent `set_true`) still yield to the
          *       initializer — see `wins_over_initializer()`.
@@ -255,6 +287,21 @@ namespace clapp {
         bool trailing_var_arg = false; /**< Treat all following tokens as values once matched. */
         bool last        = false; /**< Require the positional after the double-dash delimiter. */
         bool ignore_case = false; /**< Compare possible values without ASCII case distinctions. */
+        value_range num_args = value_range::infer();
+        cstr<64> alias{};
+        cstr<64> visible_alias{};
+        char short_alias = '\0';
+        char visible_short_alias = '\0';
+        cstr<16> value_terminator{};
+        bool hide_default_value = false;
+        bool hide_env = false;
+        bool hide_env_values = false;
+        bool hide_possible_values = false;
+        bool hide_short_help = false;
+        bool hide_long_help = false;
+        bool next_line_help = false;
+        bool auto_default_value = false;
+        bool auto_env = false;
         /** \} */
     };
 
@@ -266,6 +313,7 @@ namespace clapp {
      */
     struct value_attr {
         cstr<64> name{};   /**< Override for the generated value name. */
+        cstr<64> alias{};
         cstr<256> help{};  /**< Help text for the value. */
         bool hide = false; /**< Omit the value from generated possible-value lists. */
     };
@@ -302,6 +350,23 @@ namespace clapp {
     };
 
     /** \} */
+
+    struct required_if_eq { cstr<64> id{}; cstr<128> value{}; };
+    struct requires_if { cstr<64> value{}; cstr<64> target_id{}; };
+    struct default_value_if {
+        cstr<64> id{};
+        cstr<128> predicate_value{};
+        cstr<128> default_value{};
+    };
+    struct group_attr {
+        cstr<64> id{};
+        bool required = false;
+        bool multiple = false;
+        cstr<64> arg{};
+        cstr<64> conflicts_with{};
+        cstr<64> requires_arg{};
+    };
+    using group = group_attr;
 
     /**
      * \name Structural markers

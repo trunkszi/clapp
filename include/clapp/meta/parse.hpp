@@ -21,6 +21,7 @@
 #include <clapp/util/str.hpp>
 
 #include <cstddef>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <expected>
@@ -41,6 +42,104 @@
 #endif
 
 namespace clapp {
+
+    namespace meta {
+        /** Reflect an opt-in default initializer into the same spelling used by the CLI. */
+        template<class T, std::meta::info Member>
+        [[nodiscard]] consteval std::string_view extract_default_member_string() {
+            T defaults{};
+            const auto& value = defaults.[:Member:];
+            using V = std::remove_cvref_t<decltype(value)>;
+            std::string out;
+            if constexpr (std::is_same_v<V, bool>) {
+                out = value ? "true" : "false";
+            } else if constexpr (std::is_integral_v<V>) {
+                using U = std::make_unsigned_t<V>;
+                U magnitude = static_cast<U>(value);
+                if constexpr (std::is_signed_v<V>) {
+                    if (value < 0) { out.push_back('-'); magnitude = U{0} - magnitude; }
+                }
+                char digits[std::numeric_limits<U>::digits10 + 3]{};
+                std::size_t count = 0;
+                do { digits[count++] = static_cast<char>('0' + magnitude % 10); magnitude /= 10; } while (magnitude);
+                while (count) out.push_back(digits[--count]);
+            } else if constexpr (std::is_enum_v<V>) {
+                template for (constexpr auto item : std::define_static_array(std::meta::enumerators_of(^^V))) {
+                    if (value == [:item:]) {
+                        constexpr auto attr = annotation_or<value_attr>(item);
+                        if constexpr (!attr.name.empty()) detail::append_bytes(out, attr.name.view());
+                        else out = clapp::rename(std::meta::identifier_of(item), naming::kebab);
+                    }
+                }
+            } else if constexpr (std::is_floating_point_v<V>) {
+                // Build the exact binary value as decimal digits, then round once
+                // to max_digits10 significant digits. This avoids non-constexpr
+                // to_chars and any floating-to-integer overflow for large values.
+                V magnitude = value;
+                if (magnitude < 0) { out.push_back('-'); magnitude = -magnitude; }
+                if (magnitude != magnitude) out += "nan";
+                else if (magnitude > std::numeric_limits<V>::max()) out += "inf";
+                else if (magnitude == 0) out += "0";
+                else {
+                    int exponent = 0;
+                    while (magnitude >= V{2}) { magnitude /= V{2}; ++exponent; }
+                    while (magnitude < V{1}) { magnitude *= V{2}; --exponent; }
+                    std::string digits = "0"; // least significant decimal digit first
+                    auto multiply = [&](unsigned factor, unsigned carry = 0) {
+                        for (char& digit : digits) {
+                            const unsigned n = static_cast<unsigned>(digit - '0') * factor + carry;
+                            digit = static_cast<char>('0' + n % 10);
+                            carry = n / 10;
+                        }
+                        while (carry) { digits.push_back(static_cast<char>('0' + carry % 10)); carry /= 10; }
+                    };
+                    for (int i = 0; i < std::numeric_limits<V>::digits; ++i) {
+                        const bool bit = magnitude >= V{1};
+                        multiply(2, bit ? 1U : 0U);
+                        magnitude = (magnitude - (bit ? V{1} : V{0})) * V{2};
+                    }
+                    exponent -= std::numeric_limits<V>::digits - 1;
+                    int scale = 0;
+                    if (exponent < 0) {
+                        scale = -exponent;
+                        for (int i = 0; i < scale; ++i) multiply(5);
+                    } else for (int i = 0; i < exponent; ++i) multiply(2);
+                    std::ranges::reverse(digits);
+                    // Trailing zeroes carry no precision. Retain the original
+                    // decimal point while dropping them.
+                    int point = static_cast<int>(digits.size()) - scale;
+                    const auto precision = static_cast<std::size_t>(std::numeric_limits<V>::max_digits10);
+                    if (digits.size() > precision) {
+                        const bool round_up = digits[precision] >= '5';
+                        digits.resize(precision);
+                        if (round_up) {
+                            auto i = digits.size();
+                            while (i && digits[i - 1] == '9') digits[--i] = '0';
+                            if (i) ++digits[i - 1];
+                            else { digits.insert(digits.begin(), '1'); ++point; }
+                        }
+                    }
+                    while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
+                    if (point <= 0) {
+                        out += "0.";
+                        out.append(static_cast<std::size_t>(-point), '0');
+                        out += digits;
+                    } else {
+                        for (std::size_t i = 0; i < digits.size(); ++i) {
+                            if (i == static_cast<std::size_t>(point)) out.push_back('.');
+                            out.push_back(digits[i]);
+                        }
+                        if (static_cast<std::size_t>(point) > digits.size()) out.append(static_cast<std::size_t>(point) - digits.size(), '0');
+                    }
+                }
+            } else if constexpr (std::is_convertible_v<const V&, std::string_view>) {
+                detail::append_bytes(out, std::string_view(value));
+            } else {
+                static_assert(std::is_arithmetic_v<V>, "clapp: auto_default_value requires a scalar number, bool, string, or enum initializer");
+            }
+            return std::string_view(std::define_static_string(out));
+        }
+    }
 
     namespace detail {
 
@@ -228,7 +327,11 @@ namespace clapp {
                     // weight in every other branch, which -Wunused-local-typedefs reports
                     // once per field of every command struct in the program; the same
                     // reasoning is written out on clapp::detail::fill_struct.
-                    if constexpr (shape == field_shape::skipped) {
+                    if constexpr (meta::has_annotation<subcommand>(member) &&
+                                  shape != field_shape::subcommand_set &&
+                                  shape != field_shape::optional_subcommand_set) {
+                        ok = false;
+                    } else if constexpr (shape == field_shape::skipped) {
                         // Never parsed; its type is nobody's business.
                     } else if constexpr (shape == field_shape::flattened) {
                         using nested_type = [:std::meta::type_of(member):];
@@ -239,12 +342,21 @@ namespace clapp {
                         template for (constexpr std::meta::info alternative :
                                       meta::variant_traits<variant_type>::reflections) {
                             using alternative_type = [:alternative:];
-                            if (!all_fields_parsable<alternative_type>()) ok = false;
+                            if constexpr (std::is_same_v<alternative_type, std::monostate>) {
+                                ok = false;
+                            } else if constexpr (meta::has_annotation<external_subcommand>(alternative)) {
+                                if constexpr (!derivable_command<alternative_type> || meta::external_subcommand_shape(alternative) == 0) ok = false;
+                            } else if (!all_fields_parsable<alternative_type>()) ok = false;
                         }
                     } else if constexpr (shape == field_shape::counter) {
                         // clapp::count_type is pinned by clapp::arg_action::count and is
                         // always parsable; the field's own integer type never reaches a
                         // value_parser. See the \note on clapp::detail::store_count.
+                    } else if constexpr (shape == field_shape::tuple) {
+                        template for (constexpr auto elem : std::define_static_array(meta::tuple_types_of(std::meta::type_of(member)))) {
+                            using E = [:elem:];
+                            if (!erasable_parsable<E>) ok = false;
+                        }
                     } else if constexpr (shape == field_shape::pair) {
                         using first_type  = [:meta::pair_types_of(std::meta::type_of(member))[0]:];
                         using second_type = [:meta::pair_types_of(std::meta::type_of(member))[1]:];
@@ -323,9 +435,13 @@ namespace clapp {
                     using variant_type = [:variant_of(member):];
                     template for (constexpr std::meta::info alternative :
                                   meta::variant_traits<variant_type>::reflections) {
-                        into.subcommands.push_back(
-                                {builder_text(meta::subcommand_name_of(alternative, style)),
-                                 builder_text(std::meta::identifier_of(alternative))});
+                        if constexpr (!meta::has_annotation<external_subcommand>(alternative)) {
+                            const auto owner = builder_text(std::meta::identifier_of(alternative));
+                            into.subcommands.push_back({builder_text(meta::subcommand_name_of(alternative, style)), owner});
+                            constexpr auto attr = meta::annotation_or<command_attr>(alternative);
+                            if constexpr (!attr.alias.empty()) into.subcommands.push_back({builder_text(attr.alias.view()), owner});
+                            if constexpr (!attr.visible_alias.empty()) into.subcommands.push_back({builder_text(attr.visible_alias.view()), owner});
+                        }
                     }
                 } else {
                     constexpr arg_attr attribute = meta::annotation_or<arg_attr>(member);
@@ -342,6 +458,10 @@ namespace clapp {
                                              : builder_text(attribute.long_.view()),
                                      owner});
                         }
+                        if constexpr (!attribute.alias.empty()) into.longs.push_back({builder_text(attribute.alias.view()), owner});
+                        if constexpr (!attribute.visible_alias.empty()) into.longs.push_back({builder_text(attribute.visible_alias.view()), owner});
+                        if constexpr (attribute.short_alias != '\0') into.shorts.push_back({attribute.short_alias, owner});
+                        if constexpr (attribute.visible_short_alias != '\0') into.shorts.push_back({attribute.visible_short_alias, owner});
                         if constexpr (attribute.short_ != '\0') {
                             into.shorts.push_back({attribute.short_, owner});
                         } else if constexpr (attribute.auto_short) {
@@ -440,7 +560,8 @@ namespace clapp {
                     template for (constexpr std::meta::info alternative :
                                   meta::variant_traits<variant_type>::reflections) {
                         using alternative_type = [:alternative:];
-                        if (!names_are_unique<alternative_type>()) ok = false;
+                        if constexpr (!meta::has_annotation<external_subcommand>(alternative))
+                            if (!names_are_unique<alternative_type>()) ok = false;
                     }
                 }
             }
@@ -491,7 +612,12 @@ namespace clapp {
                                   ^^T, std::meta::access_context::current()))) {
                 constexpr field_shape shape = meta::shape_of(member);
 
-                if constexpr (shape == field_shape::skipped) {
+                if constexpr (meta::has_annotation<subcommand>(member) &&
+                              shape != field_shape::subcommand_set &&
+                              shape != field_shape::optional_subcommand_set) {
+                    CLAPP_DETAIL_DIAGNOSTIC_ASSERT(!meta::has_annotation<subcommand>(member),
+                        "clapp::subcommand{} needs a std::variant or std::optional<std::variant>");
+                } else if constexpr (shape == field_shape::skipped) {
                     // Never parsed.
                 } else if constexpr (shape == field_shape::flattened) {
                     using nested_type = [:std::meta::type_of(member):];
@@ -512,10 +638,21 @@ namespace clapp {
                     template for (constexpr std::meta::info alternative :
                                   meta::variant_traits<variant_type>::reflections) {
                         using alternative_type = [:alternative:];
-                        check_fields_parsable<alternative_type>();
+                        if constexpr (std::is_same_v<alternative_type, std::monostate>) {
+                            CLAPP_DETAIL_DIAGNOSTIC_ASSERT(!std::is_same_v<alternative_type, std::monostate>,
+                                "std::monostate is not supported as a std::variant alternative");
+                        } else if constexpr (meta::has_annotation<external_subcommand>(alternative)) {
+                            CLAPP_DETAIL_DIAGNOSTIC_ASSERT(meta::external_subcommand_shape(alternative) != 0,
+                                "clapp::external_subcommand{} on a std::variant alternative is not implemented for this shape; use a sequence field (std::vector<std::string>) or (name, sequence) fields");
+                        } else check_fields_parsable<alternative_type>();
                     }
                 } else if constexpr (shape == field_shape::counter) {
                     // clapp::count_type, never the field's own integer type.
+                } else if constexpr (shape == field_shape::tuple) {
+                    template for (constexpr auto elem : std::define_static_array(meta::tuple_types_of(std::meta::type_of(member)))) {
+                        using E = [:elem:];
+                        CLAPP_DETAIL_DIAGNOSTIC_ASSERT(erasable_parsable<E>, "clapp: tuple element needs a storable value_parser");
+                    }
                 } else if constexpr (shape == field_shape::pair) {
                     using first_type  = [:meta::pair_types_of(std::meta::type_of(member))[0]:];
                     using second_type = [:meta::pair_types_of(std::meta::type_of(member))[1]:];
@@ -652,7 +789,8 @@ namespace clapp {
                     template for (constexpr std::meta::info alternative :
                                   meta::variant_traits<variant_type>::reflections) {
                         using alternative_type = [:alternative:];
-                        check_names_unique<alternative_type>();
+                        if constexpr (!meta::has_annotation<external_subcommand>(alternative))
+                            check_names_unique<alternative_type>();
                     }
                 }
             }
@@ -715,15 +853,10 @@ namespace clapp {
          * \note Stream and exit code from `use_stderr`/`exit_code` (ADR-0001), not kind.
          * \note `fwrite` on the exit path; message is already rendered.
          */
-        [[noreturn]] inline void report_and_exit(const error& err) {
-            const std::string text = err.render().to_string();
-            std::FILE* const out   = err.use_stderr() ? stderr : stdout;
-            if (!text.empty()) {
-                static_cast<void>(std::fwrite(text.data(), 1, text.size(), out));
-                if (text.back() != '\n') static_cast<void>(std::fputc('\n', out));
-            }
-            static_cast<void>(std::fflush(out));
-            std::exit(err.exit_code());
+        [[noreturn]] inline void report_and_exit(const error& err, const command_spec& spec) {
+            error printable = err;
+            printable.set_output_if_unset(spec.get_styles(), spec.get_color());
+            printable.exit();
         }
 
         // =====================================================================
@@ -750,8 +883,8 @@ namespace clapp {
             update, /**< Incremental; nothing required. */
         };
 
-        template<class T>
-        consteval void derive_args_into(command_builder& into, naming style, derive_mode mode);
+        template<class T, bool AutoDefault = meta::annotation_or<command_attr>(^^T).auto_default_value>
+        consteval void derive_args_into(command_builder& into, naming style, derive_mode mode, const command_attr& attr);
 
         template<class V>
         consteval void
@@ -793,6 +926,28 @@ namespace clapp {
             if (attr.disable_help_flag) std::move(into).disable_help_flag();
             if (attr.disable_version_flag) std::move(into).disable_version_flag();
 
+            if (!attr.alias.empty()) std::move(into).alias(builder_text(attr.alias.view()));
+            if (!attr.visible_alias.empty()) std::move(into).visible_alias(builder_text(attr.visible_alias.view()));
+            if (!attr.long_flag.empty()) std::move(into).long_flag(builder_text(attr.long_flag.view()));
+            if (!attr.long_version.empty()) std::move(into).long_version(builder_text(attr.long_version.view()));
+            if (!attr.display_name.empty()) std::move(into).display_name(builder_text(attr.display_name.view()));
+            if (!attr.bin_name.empty()) std::move(into).bin_name(builder_text(attr.bin_name.view()));
+            if (attr.short_flag != '\0') std::move(into).short_flag(attr.short_flag);
+            if (attr.subcommands_negate_reqs) std::move(into).subcommand_negates_reqs();
+            if (attr.args_negate_subcommands) std::move(into).args_conflicts_with_subcommands();
+            if (attr.subcommand_precedence_over_arg) std::move(into).subcommand_precedence_over_arg();
+            if (attr.allow_missing_positional) std::move(into).allow_missing_positional();
+            if (attr.trailing_var_arg) std::move(into).trailing_var_arg();
+            if (attr.dont_delimit_trailing_values) std::move(into).dont_delimit_trailing_values();
+            if (attr.all_args_override_self) std::move(into).args_override_self();
+            if (attr.flatten_help) std::move(into).flatten_help();
+            if (attr.next_line_help) std::move(into).next_line_help();
+            if (attr.expand_args_from_files) std::move(into).expand_args_from_files();
+            std::move(into).color(attr.color);
+            if (attr.styled) std::move(into).styles(styles::styled());
+            if (attr.term_width) std::move(into).term_width(attr.term_width);
+            if (attr.max_term_width) std::move(into).max_term_width(attr.max_term_width);
+
             // clap's `override_required`: an update parse demands nothing.
             if (mode == derive_mode::parse) {
                 if (attr.arg_required_else_help) std::move(into).arg_required_else_help();
@@ -809,12 +964,12 @@ namespace clapp {
          * \param style Enclosing `rename_all`.
          * \param mode Parse vs update.
          * \return Configured builder for `command_builder::arg()`.
-         * \note Long option from `rename`; id is never the long spelling. Env is
-         *       never derived — must be explicit.
+         * \note Long options and opt-in environment names follow their respective
+         *       rename policies; argument ids retain the source field name.
          */
-        template<std::meta::info Member>
+        template<class T, std::meta::info Member, bool AutoDefault>
         [[nodiscard]] consteval arg_builder
-        derive_arg(std::string_view id, naming style, derive_mode mode) {
+        derive_arg(std::string_view id, naming style, derive_mode mode, const command_attr& cmd_attr) {
             constexpr deduced_arg deduced    = meta::deduce_member(Member);
             constexpr arg_attr attribute     = meta::annotation_or<arg_attr>(Member);
             constexpr std::string_view field = std::meta::identifier_of(Member);
@@ -849,7 +1004,8 @@ namespace clapp {
             if constexpr (deduced.shape != field_shape::flag &&
                           deduced.shape != field_shape::optional_flag &&
                           deduced.shape != field_shape::counter &&
-                          deduced.shape != field_shape::pair) {
+                          deduced.shape != field_shape::pair &&
+                          deduced.shape != field_shape::tuple) {
                 using value_type = [:meta::value_type_of(std::meta::type_of(Member)):];
                 if constexpr (erasable_parsable<value_type>) {
                     std::move(out).value_parser<value_type>();
@@ -859,9 +1015,22 @@ namespace clapp {
             if (!attribute.value_name.empty()) {
                 std::move(out).value_name(builder_text(attribute.value_name.view()));
             }
-            if (!attribute.env.empty()) std::move(out).env(builder_text(attribute.env.view()));
+            if (!attribute.env.empty() || attribute.auto_env || cmd_attr.auto_env) {
+                std::string env = attribute.env.empty()
+                    ? clapp::rename(field, cmd_attr.rename_all_env)
+                    : builder_text(attribute.env.view());
+                const std::string prefix = builder_text(cmd_attr.env_prefix.view());
+                if (!prefix.empty() && !env.starts_with(prefix)) env = prefix + env;
+                std::move(out).env(env);
+            }
             if (!attribute.default_value.empty()) {
                 std::move(out).default_value(builder_text(attribute.default_value.view()));
+            } else if constexpr (meta::has_member_initializer(Member) && (attribute.auto_default_value || AutoDefault)) {
+                using M = [:std::meta::type_of(Member):];
+                if constexpr (std::is_arithmetic_v<M> || std::is_enum_v<M> || std::is_convertible_v<const M&, std::string_view>) {
+                    constexpr auto text = meta::extract_default_member_string<T, Member>();
+                    std::move(out).default_value(builder_text(text)).reflected_default_value();
+                }
             }
             if (!attribute.default_missing_value.empty()) {
                 std::move(out).default_missing_value(
@@ -901,6 +1070,19 @@ namespace clapp {
                 std::move(out).group(builder_text(attribute.group.view()));
             }
 
+            if (!attribute.alias.empty()) std::move(out).alias(builder_text(attribute.alias.view()));
+            if (!attribute.visible_alias.empty()) std::move(out).visible_alias(builder_text(attribute.visible_alias.view()));
+            if (!attribute.value_terminator.empty()) std::move(out).value_terminator(builder_text(attribute.value_terminator.view()));
+            if (attribute.short_alias != '\0') std::move(out).short_alias(attribute.short_alias);
+            if (attribute.visible_short_alias != '\0') std::move(out).visible_short_alias(attribute.visible_short_alias);
+            if (attribute.hide_default_value) std::move(out).hide_default_value();
+            if (attribute.hide_env) std::move(out).hide_env();
+            if (attribute.hide_env_values) std::move(out).hide_env_values();
+            if (attribute.hide_possible_values) std::move(out).hide_possible_values();
+            if (attribute.hide_short_help) std::move(out).hide_short_help();
+            if (attribute.hide_long_help) std::move(out).hide_long_help();
+            if (attribute.next_line_help) std::move(out).next_line_help();
+
             // --- stackable relations -----------------------------------------
             for (const std::string_view other : meta::relation_ids_of<conflicts_with>(Member)) {
                 std::move(out).conflicts_with(builder_text(other));
@@ -924,14 +1106,51 @@ namespace clapp {
                 if (!all_of.empty()) std::move(out).required_unless_present_all(all_of);
             }
 
+            for (const auto& rule : meta::annotations_all_of<required_if_eq>(Member))
+                std::move(out).required_if_eq(builder_text(rule.id.view()), builder_text(rule.value.view()));
+            for (const auto& rule : meta::annotations_all_of<requires_if>(Member))
+                std::move(out).requires_if(builder_text(rule.value.view()), builder_text(rule.target_id.view()));
+            for (const auto& rule : meta::annotations_all_of<default_value_if>(Member))
+                std::move(out).default_value_if(builder_text(rule.id.view()), builder_text(rule.predicate_value.view()), builder_text(rule.default_value.view()));
+
             // --- required, last, so an explicit tri and the update mode both win ---
             std::move(out).required(mode == derive_mode::parse && deduced.required);
             return out;
         }
 
-        /** \brief Derive the reflected arguments of \p T into \p into. */
         template<class T>
-        consteval void derive_args_into(command_builder& into, naming style, derive_mode mode) {
+        consteval void add_group_members(group_builder& group) {
+            template for (constexpr auto member : std::define_static_array(std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()))) {
+                constexpr auto shape = meta::shape_of(member);
+                if constexpr (shape == field_shape::flattened) {
+                    using Nested = [:std::meta::type_of(member):];
+                    add_group_members<Nested>(group);
+                } else if constexpr (clapp::is_argument(shape) && !meta::has_annotation<from_global>(member)) {
+                    std::move(group).arg(builder_text(meta::arg_id_of<T, member>()));
+                }
+            }
+        }
+
+        template<class T>
+        consteval void derive_groups_into(command_builder& into, std::meta::info target, derive_mode mode) {
+            for (const auto& attribute : meta::annotations_all_of<group_attr>(target)) {
+                const auto id = attribute.id.empty() ? builder_text(std::meta::identifier_of(^^T))
+                                                    : builder_text(attribute.id.view());
+                group_builder group{id};
+                std::move(group).required(mode == derive_mode::parse && attribute.required).multiple(attribute.multiple);
+                if (attribute.arg.empty()) add_group_members<T>(group);
+                else std::move(group).arg(builder_text(attribute.arg.view()));
+                if (!attribute.conflicts_with.empty()) std::move(group).conflicts_with(builder_text(attribute.conflicts_with.view()));
+                if (!attribute.requires_arg.empty()) std::move(group).requires_(builder_text(attribute.requires_arg.view()));
+                for (auto other : meta::relation_ids_of<conflicts_with>(target)) std::move(group).conflicts_with(builder_text(other));
+                for (auto other : meta::relation_ids_of<requires_arg>(target)) std::move(group).requires_(builder_text(other));
+                std::move(into).group(std::move(group));
+            }
+        }
+
+        /** \brief Derive the reflected arguments of \p T into \p into. */
+        template<class T, bool AutoDefault>
+        consteval void derive_args_into(command_builder& into, naming style, derive_mode mode, const command_attr& attr) {
             static_assert(derivable_command<T>,
                           "clapp: command_of<T>() needs an aggregate with public data members; "
                           "std::meta::access_context::current() cannot see private ones.");
@@ -949,7 +1168,8 @@ namespace clapp {
                     // would be a duplicate id rather than a second argument.
                 } else if constexpr (deduced.shape == field_shape::flattened) {
                     using nested_type = [:std::meta::type_of(member):];
-                    derive_args_into<nested_type>(into, style, mode);
+                    derive_args_into<nested_type, AutoDefault || meta::annotation_or<command_attr>(^^nested_type).auto_default_value>(into, style, mode, attr);
+                    derive_groups_into<nested_type>(into, member, mode);
                 } else if constexpr (deduced.shape == field_shape::subcommand_set) {
                     // clap's implicit pair for a non-Option `#[command(subcommand)]`:
                     // `.subcommand_required(true).arg_required_else_help(true)`, both
@@ -964,9 +1184,10 @@ namespace clapp {
                     derive_subcommands_into<variant_type>(into, style, mode);
                 } else {
                     constexpr std::string_view id = meta::arg_id_of<T, member>();
-                    std::move(into).arg(derive_arg<member>(id, style, mode));
+                    std::move(into).arg(derive_arg<T, member, AutoDefault>(id, style, mode, attr));
                 }
             }
+            derive_groups_into<T>(into, ^^T, mode);
         }
 
         /** \brief Derive each reflected variant alternative as a subcommand. */
@@ -978,15 +1199,28 @@ namespace clapp {
                 using alternative_type = [:alternative:];
 
                 if constexpr (std::is_same_v<alternative_type, std::monostate>) {
-                    std::abort();
+                    CLAPP_DETAIL_DIAGNOSTIC_ASSERT(!std::is_same_v<alternative_type, std::monostate>,
+                        "std::monostate is not supported as a std::variant alternative");
                 } else if constexpr (meta::has_annotation<external_subcommand>(alternative)) {
-                    std::abort();
+                    constexpr unsigned shape = meta::external_subcommand_shape(alternative);
+                    CLAPP_DETAIL_DIAGNOSTIC_ASSERT(shape != 0,
+                        "clapp::external_subcommand{} on a std::variant alternative is not implemented for this shape; use a sequence field (std::vector<std::string>) or (name, sequence) fields");
+                    if constexpr (shape != 0) {
+                        constexpr auto payload = [] consteval {
+                            std::meta::info last{};
+                            for (auto m : std::meta::nonstatic_data_members_of(alternative, std::meta::access_context::current()))
+                                if (!meta::has_annotation<skip>(m)) last = m;
+                            return meta::sole_type_argument(std::meta::type_of(last));
+                        }();
+                        using E = [:payload:];
+                        std::move(into).allow_external_subcommands().external_subcommand_value_parser<E>();
+                    }
                 } else {
                     command_builder child{
                             builder_text(meta::subcommand_name_of(alternative, style))};
                     apply_command_attr(child, meta::annotation_or<command_attr>(alternative), mode);
                     derive_args_into<alternative_type>(
-                            child, meta::rename_all_of(alternative), mode);
+                            child, meta::rename_all_of(alternative), mode, meta::annotation_or<command_attr>(alternative));
                     std::move(into).subcommand(std::move(child));
                 }
             }
@@ -1006,7 +1240,7 @@ namespace clapp {
             // what keeps the root's name and a nested alternative's name one rule.
             command_builder root{builder_text(meta::subcommand_name_of(^^T, naming::kebab))};
             apply_command_attr(root, attr, mode);
-            derive_args_into<T>(root, meta::rename_all_of(^^T), mode);
+            derive_args_into<T>(root, meta::rename_all_of(^^T), mode, attr);
             return root.freeze();
         }
 
@@ -1020,7 +1254,7 @@ namespace clapp {
      * \brief Build the frozen command tree \p T describes (mirror of `from_matches`).
      * \tparam T Aggregate command struct.
      * \return Frozen tree (static storage via freeze; ADR-0005).
-     * \throws Compile error for monostate / `external_subcommand` / freeze rejects.
+     * \throws Compile error for unsupported alternatives or invalid frozen schemas.
      * \code
      *     static constexpr clapp::command_spec spec = clapp::command_of<cli>();
      *     static_assert(spec.has_arg("verbose"));
@@ -1071,7 +1305,9 @@ namespace clapp {
 
         std::expected<arg_matches, error> matches = detail::run_parser(spec, raw);
         if (!matches.has_value()) return std::unexpected(std::move(matches.error()));
-        return from_matches<T>(matches.value());
+        auto parsed = from_matches<T>(matches.value());
+        if (!parsed) parsed.error().set_output(spec.get_styles(), spec.get_color());
+        return parsed;
     }
 
     /**
@@ -1138,7 +1374,7 @@ namespace clapp {
         requires parsable_command<T>
     [[nodiscard]] T parse_from(const raw_args& raw) {
         std::expected<T, error> got = try_parse_from<T>(raw);
-        if (!got.has_value()) detail::report_and_exit(got.error());
+        if (!got.has_value()) detail::report_and_exit(got.error(), command_of<T>());
         return std::move(got.value());
     }
 
@@ -1188,6 +1424,29 @@ namespace clapp {
         return parse_from<T>(raw_args{argc, argv});
     }
 
+    template<class T> requires parsable_command<T>
+    [[nodiscard]] T parse() { return parse_from<T>(raw_args::from_args()); }
+
+    template<class T> requires parsable_command<T>
+    [[nodiscard]] std::expected<T, error> try_parse() { return try_parse_from<T>(raw_args::from_args()); }
+
+    template<class T> requires (!parsable_command<T>)
+    T parse() { detail::reject_command<T>(); }
+
+    template<class T> requires (!parsable_command<T>)
+    std::expected<T, error> try_parse() { detail::reject_command<T>(); }
+
+#if defined(_WIN32)
+    template<class T> requires parsable_command<T>
+    [[nodiscard]] T parse(int argc, const char* const* argv) { return parse_from<T>(raw_args{argc, argv}); }
+    template<class T> requires parsable_command<T>
+    [[nodiscard]] std::expected<T, error> try_parse(int argc, const char* const* argv) { return try_parse_from<T>(raw_args{argc, argv}); }
+    template<class T> requires (!parsable_command<T>)
+    T parse(int, const char* const*) { detail::reject_command<T>(); }
+    template<class T> requires (!parsable_command<T>)
+    std::expected<T, error> try_parse(int, const char* const*) { detail::reject_command<T>(); }
+#endif
+
     // =======================================================================
     // Entry points — the incremental half
     // =======================================================================
@@ -1207,7 +1466,9 @@ namespace clapp {
 
         std::expected<arg_matches, error> matches = detail::run_parser(spec, raw);
         if (!matches.has_value()) return std::unexpected(std::move(matches.error()));
-        return update_from_matches<T>(out, matches.value());
+        auto updated = update_from_matches<T>(out, matches.value());
+        if (!updated) updated.error().set_output(spec.get_styles(), spec.get_color());
+        return updated;
     }
 
     /**
@@ -1265,7 +1526,7 @@ namespace clapp {
         requires parsable_command<T>
     void update_from(T& out, const raw_args& raw) {
         const std::expected<void, error> outcome = try_update_from<T>(out, raw);
-        if (!outcome.has_value()) detail::report_and_exit(outcome.error());
+        if (!outcome.has_value()) detail::report_and_exit(outcome.error(), command_for_update<T>());
     }
 
     /**
