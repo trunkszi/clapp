@@ -687,6 +687,7 @@ namespace clapp {
                     if (std::optional<cow_str> flag = help_flag_of(about); flag.has_value())
                         outcome.error().set_help_flag(std::move(*flag));
                 }
+                if (!outcome) outcome.error().set_output_if_unset(cmd_->get_styles(), cmd_->get_color());
                 return outcome;
             }
 
@@ -1757,6 +1758,12 @@ namespace clapp {
                         return parse_result::done();
                     }
                     case arg_action::count: {
+                        std::size_t logical_count = 0;
+                        if (source == clapp::value_source::command_line) {
+                            if (const auto* previous = matcher.get(arg.get_id().name()); previous != nullptr)
+                                logical_count = previous->logical_occurrence_count();
+                            if (logical_count != std::numeric_limits<std::size_t>::max()) ++logical_count;
+                        }
                         if (raw_values.empty())
                             raw_values.emplace_back(spell_number(next_count(matcher, arg)));
                         static_cast<void>(matcher.remove(arg.get_id().name()));
@@ -1765,6 +1772,13 @@ namespace clapp {
                                     push_arg_values(arg, std::move(raw_values), matcher);
                             !pushed.has_value())
                             return std::unexpected(std::move(pushed.error()));
+                        if (auto* stored = matcher.get(arg.get_id().name()); stored != nullptr) {
+                            if (source != clapp::value_source::command_line) {
+                                const auto values = stored->values();
+                                if (!values.empty()) logical_count = values.front().get<count_type>();
+                            }
+                            stored->set_logical_occurrence_count(logical_count);
+                        }
                         return parse_result::done();
                     }
                     case arg_action::help:
@@ -1988,7 +2002,25 @@ namespace clapp {
 
             /** \brief Apply every default. clap's `add_defaults`. */
             std::expected<void, error> add_defaults(arg_matcher &matcher) {
-                for (const arg_spec &arg: cmd_->get_arguments()) {
+                // Seed only opt-in reflected defaults, resolving their dependency
+                // graph in bounded passes. Regular builder defaults keep their
+                // established declaration-order behavior.
+                const auto arguments = cmd_->get_arguments();
+                for (std::size_t pass = 0; pass < arguments.size(); ++pass) {
+                    bool progress = false;
+                    for (const arg_spec& arg : arguments) {
+                        if (!arg.has_reflected_default_value() || matcher.contains(arg.get_id().name())) continue;
+                        bool dependencies_ready = true;
+                        for (const auto& rule : arg.get_default_values_ifs()) {
+                            if (!matcher.contains(rule.id.name())) { dependencies_ready = false; break; }
+                        }
+                        if (!dependencies_ready) continue;
+                        if (auto applied = add_default_value(arg, matcher); !applied) return applied;
+                        if (matcher.contains(arg.get_id().name())) progress = true;
+                    }
+                    if (!progress) break;
+                }
+                for (const arg_spec &arg: arguments) {
                     if (std::expected<void, error> applied = add_default_value(arg, matcher);
                         !applied.has_value())
                         return applied;
@@ -2403,7 +2435,20 @@ namespace clapp {
      *          drawn at command_of<T>(): compile-time above, runtime below.
      */
     [[nodiscard]] inline std::expected<arg_matches, error> parse(const command_spec &cmd,
-                                                                 const raw_args &raw) {
+                                                                 const raw_args &input) {
+        raw_args expanded;
+        if (cmd.is_expand_args_from_files_set()) {
+            const bool has_binary = !cmd.is_no_binary_name_set() && !input.empty();
+            const raw_args arguments{std::from_range, input.items().subspan(has_binary ? 1 : 0)};
+            auto outcome = arguments.expand_response_files();
+            if (!outcome) {
+                outcome.error().set_output(cmd.get_styles(), cmd.get_color());
+                return std::unexpected(std::move(outcome.error()));
+            }
+            expanded = std::move(*outcome);
+            if (has_binary) expanded.insert(arg_cursor{}, {input.items().front().view()});
+        }
+        const raw_args& raw = cmd.is_expand_args_from_files_set() ? expanded : input;
         arg_cursor cursor = raw.cursor();
         const raw_args *stream = &raw;
         raw_args rewritten;
@@ -2437,6 +2482,35 @@ namespace clapp {
 
         return std::move(matcher).into_inner();
     }
+
+    inline std::expected<arg_matches, error> command_spec::try_get_matches(const raw_args& raw) const {
+        return clapp::parse(*this, raw);
+    }
+    inline std::expected<arg_matches, error>
+    command_spec::try_get_matches(int argc, const native_char* const* argv) const {
+        return try_get_matches(raw_args{argc, argv});
+    }
+    inline std::expected<arg_matches, error> command_spec::try_get_matches() const {
+        return try_get_matches(raw_args::from_args());
+    }
+    inline arg_matches command_spec::get_matches(const raw_args& raw) const {
+        auto outcome = try_get_matches(raw);
+        if (!outcome) outcome.error().exit();
+        return std::move(*outcome);
+    }
+    inline arg_matches command_spec::get_matches(int argc, const native_char* const* argv) const {
+        return get_matches(raw_args{argc, argv});
+    }
+    inline arg_matches command_spec::get_matches() const { return get_matches(raw_args::from_args()); }
+#if defined(_WIN32)
+    inline std::expected<arg_matches, error>
+    command_spec::try_get_matches(int argc, const char* const* argv) const {
+        return try_get_matches(raw_args{argc, argv});
+    }
+    inline arg_matches command_spec::get_matches(int argc, const char* const* argv) const {
+        return get_matches(raw_args{argc, argv});
+    }
+#endif
 
     namespace detail {
         /**

@@ -283,6 +283,30 @@ namespace clapp {
             return unwrap(id, try_get_one<T>(id));
         }
 
+        /** \brief Copy the first value, or return the supplied fallback when absent. */
+        template<class T> requires any_storable<T> && std::copy_constructible<T>
+        [[nodiscard]] T get_or(std::string_view id, T fallback) const {
+            const auto value = get_one<T>(id);
+            return value ? **value : std::move(fallback);
+        }
+
+        /** \brief Return the first value; terminate on absence, like a failed typed lookup. */
+        template<class T> requires any_storable<T>
+        [[nodiscard]] const T& get_expect(std::string_view id) const {
+            const auto value = get_one<T>(id);
+            if (!value) {
+                detail::report_matches_absent(id, "an argument with a value");
+            }
+            return **value;
+        }
+
+        /** \brief Copy the first value into an owning optional. */
+        template<class T> requires any_storable<T> && std::copy_constructible<T>
+        [[nodiscard]] std::optional<T> get_copied(std::string_view id) const {
+            const auto value = get_one<T>(id);
+            return value ? std::optional<T>{**value} : std::nullopt;
+        }
+
         /**
          * \brief Every value for \p id as `T`s, flat, in order. clap's `get_many`.
          *
@@ -652,6 +676,12 @@ namespace clapp {
             const matched_arg *found = find_arg(id);
             if (found == nullptr) return std::nullopt;
             return found->index_at(0);
+        }
+
+        /** \brief Occurrences without the count action's uint8_t presentation saturation. */
+        [[nodiscard]] std::size_t occurrences_of(std::string_view id) const noexcept {
+            const matched_arg* found = find_arg(id);
+            return found == nullptr ? 0 : found->logical_occurrence_count();
         }
 
         /**

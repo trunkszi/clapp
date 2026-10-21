@@ -416,11 +416,7 @@ namespace clapp {
      * \brief Whether output should be coloured (clap ColorChoice).
      * \note auto_ is enumerator zero (keyword clash); reflection spells it `auto`.
      */
-    enum class color_choice : std::uint8_t {
-        auto_, /**< Colour when the stream is a terminal that supports it. */
-        always, /**< Colour regardless of where the output goes. */
-        never, /**< Never colour. */
-    };
+
 
     /** \brief Every color_choice, for value-enum expansion. */
     inline constexpr std::array<color_choice, 3> all_color_choices{
@@ -512,8 +508,8 @@ namespace clapp {
                       "added without widening the count indexes past the end of "
                       "styles::by_class.");
 
-        static_assert(std::meta::enumerators_of(^^color_choice).size() == all_color_choices.size(),
-                      "clapp: all_color_choices must list every clapp::color_choice.");
+        static_assert(std::meta::enumerators_of(^^color_choice).size() == all_color_choices.size() + 1,
+                      "clapp: all_color_choices must list every distinct clapp::color_choice (auto_detect aliases auto_).");
 
         static_assert(style_class{} == style_class::plain &&
                       styles::plain().get(style_class{}) == style{},

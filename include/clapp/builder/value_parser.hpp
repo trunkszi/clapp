@@ -15,8 +15,12 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
+#include <cmath>
 #include <concepts>
+#include <compare>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
@@ -429,6 +433,202 @@ namespace clapp {
         }
     };
 
+    /** An integral value constrained to a closed interval. */
+    template<std::integral T, T Min, T Max>
+        requires (Min <= Max)
+    struct ranged {
+        T value{};
+        constexpr operator T() const noexcept { return value; }
+        constexpr auto operator<=>(const ranged&) const = default;
+    };
+
+    template<std::integral T, T Min, T Max>
+        requires (Min <= Max)
+    struct value_parser<ranged<T, Min, Max>> {
+        [[nodiscard]] static constexpr std::expected<ranged<T, Min, Max>, parse_error>
+        parse(os_str value) {
+            auto parsed = value_parser<T>::parse(value);
+            if (!parsed) return std::unexpected(parsed.error());
+            if (*parsed < Min || *parsed > Max) {
+                return std::unexpected(parse_error{
+                        .kind = parse_error_kind::out_of_range,
+                        .input = value,
+                        .type_name = detail::parsed_type_name<ranged<T, Min, Max>>,
+                        .domain = domain});
+            }
+            return ranged<T, Min, Max>{*parsed};
+        }
+
+    private:
+        static constexpr std::string_view domain = [] consteval {
+            std::array<char, 128> buffer{};
+            auto* cursor = buffer.data();
+            cursor = std::to_chars(cursor, buffer.data() + buffer.size(), +Min).ptr;
+            *cursor++ = '.';
+            *cursor++ = '.';
+            *cursor++ = '=';
+            cursor = std::to_chars(cursor, buffer.data() + buffer.size(), +Max).ptr;
+            return std::string_view(std::define_static_string(
+                    std::string_view(buffer.data(), static_cast<std::size_t>(cursor - buffer.data()))));
+        }();
+    };
+
+    namespace detail {
+        // Decimal arithmetic keeps integral duration conversion exact even when
+        // long double cannot distinguish every uint64_t or a decimal fraction.
+        inline std::string duration_multiply(std::string_view lhs, std::uintmax_t factor) {
+            const std::string rhs = std::to_string(factor);
+            std::vector<unsigned> digits(lhs.size() + rhs.size());
+            for (std::size_t i = lhs.size(); i > 0; --i) {
+                for (std::size_t j = rhs.size(); j > 0; --j) {
+                    digits[i + j - 1] += static_cast<unsigned>(lhs[i - 1] - '0') *
+                                          static_cast<unsigned>(rhs[j - 1] - '0');
+                }
+            }
+            for (std::size_t i = digits.size(); i > 1; --i) {
+                digits[i - 2] += digits[i - 1] / 10;
+                digits[i - 1] %= 10;
+            }
+            std::string result;
+            for (unsigned digit : digits) {
+                if (!result.empty() || digit != 0) result += static_cast<char>('0' + digit);
+            }
+            return result.empty() ? "0" : result;
+        }
+
+        inline std::pair<std::string, bool> duration_divide(std::string_view numerator,
+                                                          std::string_view denominator) {
+            std::string quotient;
+            std::string remainder = "0";
+            for (char digit : numerator) {
+                if (remainder == "0") remainder.clear();
+                remainder += digit;
+                unsigned count = 0;
+                while (remainder.size() > denominator.size() ||
+                       (remainder.size() == denominator.size() && remainder >= denominator)) {
+                    int borrow = 0;
+                    for (std::size_t i = 0; i < remainder.size(); ++i) {
+                        const auto pos = remainder.size() - 1 - i;
+                        const int sub = i < denominator.size() ? denominator[denominator.size() - 1 - i] - '0' : 0;
+                        int difference = remainder[pos] - '0' - sub - borrow;
+                        borrow = difference < 0 ? 1 : 0;
+                        if (borrow) difference += 10;
+                        remainder[pos] = static_cast<char>('0' + difference);
+                    }
+                    const auto first = remainder.find_first_not_of('0');
+                    remainder = first == std::string::npos ? "0" : remainder.substr(first);
+                    ++count;
+                }
+                if (!quotient.empty() || count != 0) quotient += static_cast<char>('0' + count);
+            }
+            return {quotient.empty() ? "0" : quotient, remainder == "0"};
+        }
+    }
+
+    /**
+     * Parse durations using ns, us/µs, ms, s, m or h. A number without a unit
+     * denotes ticks of the target duration. Integral representations reject
+     * fractional target ticks instead of silently truncating them.
+     */
+    template<class Rep, class Period>
+        requires std::is_arithmetic_v<Rep> && (!std::same_as<Rep, bool>)
+    struct value_parser<std::chrono::duration<Rep, Period>> {
+        using duration_type = std::chrono::duration<Rep, Period>;
+
+        [[nodiscard]] static std::expected<duration_type, parse_error> parse(os_str value) {
+            const auto text = value.to_string_view();
+            if (!text) return std::unexpected(detail::not_utf8<duration_type>(value, text.error()));
+            auto digits = *text;
+            if (!digits.empty() && digits.front() == '+') {
+                digits.remove_prefix(1);
+                if (!digits.empty() && (digits.front() == '-' || digits.front() == '+')) digits = {};
+            }
+            const auto invalid = [&](std::string_view reason, parse_error_kind kind = parse_error_kind::invalid_value) {
+                return std::unexpected(parse_error{.kind = kind, .input = value,
+                        .type_name = detail::parsed_type_name<duration_type>, .reason = reason});
+            };
+            if (digits.empty()) return invalid("expected a duration (ns, us, ms, s, m or h)");
+            long double amount{};
+            const auto result = detail::float_from_chars(digits.data(), digits.data() + digits.size(),
+                                                         amount, std::chars_format::general);
+            if (result.ec == std::errc::result_out_of_range)
+                return invalid("duration is outside the representable range", parse_error_kind::out_of_range);
+            if (result.ec != std::errc{} || !std::isfinite(amount))
+                return invalid("expected a finite duration (ns, us, ms, s, m or h)");
+            const std::string_view unit(result.ptr, static_cast<std::size_t>(digits.data() + digits.size() - result.ptr));
+            long double seconds{};
+            if (unit.empty()) {
+                seconds = static_cast<long double>(Period::num) / static_cast<long double>(Period::den);
+            } else if (unit == "ns") seconds = 1.0L / 1000000000.0L;
+            else if (unit == "us" || unit == "µs") seconds = 1.0L / 1000000.0L;
+            else if (unit == "ms") seconds = 1.0L / 1000.0L;
+            else if (unit == "s") seconds = 1.0L;
+            else if (unit == "m") seconds = 60.0L;
+            else if (unit == "h") seconds = 3600.0L;
+            else return invalid("unknown duration unit; expected ns, us, ms, s, m or h");
+            if constexpr (std::integral<Rep>) {
+                auto number = digits.substr(0, static_cast<std::size_t>(result.ptr - digits.data()));
+                const bool negative = number.starts_with('-');
+                if (negative) number.remove_prefix(1);
+                const auto exponent_pos = number.find_first_of("eE");
+                auto mantissa = number.substr(0, exponent_pos);
+                long long exponent = 0;
+                if (exponent_pos != std::string_view::npos) {
+                    auto exp = number.substr(exponent_pos + 1);
+                    if (exp.starts_with('+')) exp.remove_prefix(1);
+                    const auto converted = std::from_chars(exp.data(), exp.data() + exp.size(), exponent);
+                    if (converted.ec != std::errc{})
+                        return invalid("duration is outside the representable range", parse_error_kind::out_of_range);
+                }
+                const auto decimal = mantissa.find('.');
+                if (decimal != std::string_view::npos)
+                    exponent -= static_cast<long long>(mantissa.size() - decimal - 1);
+                std::string numerator;
+                for (char digit : mantissa) if (digit != '.') numerator += digit;
+                const auto first = numerator.find_first_not_of('0');
+                if (first == std::string::npos) return duration_type{Rep{0}};
+                numerator.erase(0, first);
+                while (numerator.ends_with('0')) { numerator.pop_back(); ++exponent; }
+                std::uintmax_t unit_num = 1;
+                std::uintmax_t unit_den = 1;
+                if (unit == "ns") unit_den = 1000000000;
+                else if (unit == "us" || unit == "µs") unit_den = 1000000;
+                else if (unit == "ms") unit_den = 1000;
+                else if (unit == "m") unit_num = 60;
+                else if (unit == "h") unit_num = 3600;
+                std::string denominator = "1";
+                if (!unit.empty()) {
+                    numerator = detail::duration_multiply(numerator, unit_num);
+                    numerator = detail::duration_multiply(numerator, static_cast<std::uintmax_t>(Period::den));
+                    denominator = detail::duration_multiply(denominator, unit_den);
+                    denominator = detail::duration_multiply(denominator, static_cast<std::uintmax_t>(Period::num));
+                }
+                if (exponent > 0) numerator.append(static_cast<std::size_t>(exponent), '0');
+                else if (exponent < 0) denominator.append(static_cast<std::size_t>(-exponent), '0');
+                const auto [quotient, exact] = detail::duration_divide(numerator, denominator);
+                if (!exact) return invalid("duration is not an integral number of target ticks");
+                const auto magnitude = value_parser<std::uintmax_t>::parse(os_str{quotient});
+                const auto upper = static_cast<std::uintmax_t>(std::numeric_limits<Rep>::max());
+                const auto limit = upper + (negative && std::is_signed_v<Rep> ? 1U : 0U);
+                if (!magnitude || *magnitude > limit || (negative && !std::is_signed_v<Rep> && *magnitude != 0))
+                    return invalid("duration is outside the representable range", parse_error_kind::out_of_range);
+                if (negative && std::is_signed_v<Rep>) {
+                    if (*magnitude == limit) return duration_type{std::numeric_limits<Rep>::lowest()};
+                    return duration_type{static_cast<Rep>(-static_cast<std::intmax_t>(*magnitude))};
+                }
+                return duration_type{static_cast<Rep>(*magnitude)};
+            }
+            const long double ticks = unit.empty() ? amount : amount * seconds *
+                    static_cast<long double>(Period::den) / static_cast<long double>(Period::num);
+            if (!std::isfinite(ticks))
+                return invalid("duration is outside the representable range", parse_error_kind::out_of_range);
+            if (ticks < std::numeric_limits<Rep>::lowest() || ticks > std::numeric_limits<Rep>::max()) {
+                return invalid("duration is outside the representable range", parse_error_kind::out_of_range);
+            }
+            return duration_type{static_cast<Rep>(ticks)};
+        }
+    };
+
     // -----------------------------------------------------------------------
     // Floating point
     // -----------------------------------------------------------------------
@@ -744,15 +944,38 @@ namespace clapp {
             return std::meta::enumerators_of(^^E).size();
         }
 
+        template<class E>
+        [[nodiscard]] consteval bool enum_spellings_unique() {
+            const auto enumerators = std::meta::enumerators_of(^^E);
+            for (std::size_t i = 0; i < enumerators.size(); ++i) {
+                const auto left = meta::annotation_or<value_attr>(enumerators[i]);
+                const std::string left_name = left.name.empty()
+                        ? rename(std::meta::identifier_of(enumerators[i]), naming::kebab)
+                        : std::string(left.name.view());
+                for (std::size_t j = i + 1; j < enumerators.size(); ++j) {
+                    const auto right = meta::annotation_or<value_attr>(enumerators[j]);
+                    const std::string right_name = right.name.empty()
+                            ? rename(std::meta::identifier_of(enumerators[j]), naming::kebab)
+                            : std::string(right.name.view());
+                    if (left_name == right_name ||
+                        (!left.alias.empty() && left.alias.view() == right_name) ||
+                        (!right.alias.empty() && right.alias.view() == left_name) ||
+                        (!left.alias.empty() && !right.alias.empty() && left.alias == right.alias)) return false;
+                }
+            }
+            return true;
+        }
+
         /**
          * \brief Command-line spellings of every enumerator of \p E (declaration order).
          * \tparam E Enumeration. \tparam N enumerator_count<E>().
          * \return possible_values in static storage (name from value attr, else kebab rename).
-         * \warning Duplicate spellings abort constant evaluation.
+         * \warning Names and aliases must not collide between enumerators.
          */
         template<class E, std::size_t N>
             requires std::is_enum_v<E>
         [[nodiscard]] consteval std::array<possible_value, N> enum_values_of() {
+            static_assert(enum_spellings_unique<E>(), "clapp: enum value names and aliases must be unique");
             const std::vector<std::meta::info> enumerators = std::meta::enumerators_of(^^E);
             std::array<possible_value, N> values{};
 
@@ -768,13 +991,12 @@ namespace clapp {
                                 : std::string(attribute.name.view());
                 values[i] = make_possible_value(spelling, attribute.help.view())
                                     .with_hide(attribute.hide);
-            }
-
-            for (std::size_t i = 0; i < N; ++i) {
-                for (std::size_t j = i + 1; j < N; ++j) {
-                    if (values[i].get_name() == values[j].get_name()) std::abort();
+                if (!attribute.alias.empty()) {
+                    values[i] = values[i].with_aliases(make_static_aliases(
+                            std::array<std::string_view, 1>{attribute.alias.view()}));
                 }
             }
+
             return values;
         }
 

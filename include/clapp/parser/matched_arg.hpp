@@ -259,6 +259,7 @@ namespace clapp {
             groups_.clear();
             indices_.clear();
             source_.reset();
+            logical_count_.reset();
             return out;
         }
 
@@ -376,6 +377,12 @@ namespace clapp {
         /** \brief How many values were collected in total. clap's `num_vals`. */
         [[nodiscard]] std::size_t value_count() const noexcept { return values_.size(); }
 
+        /** \brief Unsaturated logical count for count actions; other actions use occurrences. */
+        [[nodiscard]] std::size_t logical_occurrence_count() const noexcept {
+            return logical_count_.value_or(groups_.size());
+        }
+        void set_logical_occurrence_count(std::size_t count) noexcept { logical_count_ = count; }
+
         /** \brief How many times the argument was seen. */
         [[nodiscard]] std::size_t occurrence_count() const noexcept { return groups_.size(); }
 
@@ -447,7 +454,7 @@ namespace clapp {
          *          identical bytes. clap makes the same trade (`vals: _` in PartialEq).
          */
         [[nodiscard]] bool operator==(const matched_arg& other) const {
-            return source_ == other.source_ && indices_ == other.indices_ &&
+            return logical_count_ == other.logical_count_ && source_ == other.source_ && indices_ == other.indices_ &&
                    type_id_ == other.type_id_ && groups_ == other.groups_ &&
                    ignore_case_ == other.ignore_case_ &&
                    std::ranges::equal(raw_values_,
@@ -459,6 +466,7 @@ namespace clapp {
 
     private:
         std::optional<clapp::value_source> source_{};
+        std::optional<std::size_t> logical_count_{};
         std::vector<std::size_t> indices_{};
         any_id type_id_{};
         std::vector<any_value> values_{};

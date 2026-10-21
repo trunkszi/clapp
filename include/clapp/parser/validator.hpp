@@ -493,6 +493,18 @@ namespace clapp::detail {
             }
         }
 
+        /** Opt-in reflected defaults participate in equality predicates; ordinary
+         * builder defaults retain clap's explicit-source semantics. */
+        [[nodiscard]] bool conditional_value_matches(const arg_matcher& matcher,
+                                                     std::string_view id,
+                                                     const arg_predicate& predicate) const {
+            if (matcher.check_explicit(id, predicate)) return true;
+            const arg_spec* definition = cmd_->find_arg(id);
+            const matched_arg* matched = matcher.get(id);
+            return definition != nullptr && definition->has_reflected_default_value() &&
+                   matched != nullptr && matched->has_raw_value(os_str{predicate.value.name()});
+        }
+
         [[nodiscard]] std::expected<void, error> validate_required(const arg_matcher &matcher,
                                                                    const conflicts &table) {
             gather_requires(matcher);
@@ -545,12 +557,12 @@ namespace clapp::detail {
 
                 bool wanted = false;
                 for (const required_if_spec &rule: arg.get_required_if_eq_any()) {
-                    if (matcher.check_explicit(rule.id.name(), equals(rule.value)))
+                    if (conditional_value_matches(matcher, rule.id.name(), equals(rule.value)))
                         wanted = true;
                 }
                 const std::span<const required_if_spec> all = arg.get_required_if_eq_all();
                 if (!all.empty() && std::ranges::all_of(all, [&](const required_if_spec &rule) {
-                    return matcher.check_explicit(rule.id.name(), equals(rule.value));
+                    return conditional_value_matches(matcher, rule.id.name(), equals(rule.value));
                 }))
                     wanted = true;
 

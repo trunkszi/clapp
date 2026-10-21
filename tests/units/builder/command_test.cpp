@@ -37,7 +37,7 @@ namespace {
     static_assert(sizeof(command_flags) == sizeof(std::uint32_t));
     static_assert(std::is_trivially_copyable_v<command_flags>);
     static_assert(std::is_aggregate_v<command_flags>);
-    static_assert(clapp::command_setting_count == 30);
+    static_assert(clapp::command_setting_count == 31);
     static_assert(clapp::all_command_settings.size() == clapp::command_setting_count);
 
     // Bit positions are clap's AppSettings order and must not drift: bits 0-29 line up

@@ -80,6 +80,11 @@ namespace clapp {
             return {.start_inclusive = count, .end_inclusive = count};
         }
 
+        /** \brief Fixed-arity spelling used by heterogeneous product annotations. */
+        [[nodiscard]] static constexpr value_range exact(std::size_t count) noexcept {
+            return exactly(count);
+        }
+
         /** \brief At least \p min values, with no upper limit. */
         [[nodiscard]] static constexpr value_range at_least(std::size_t min) noexcept {
             return {.start_inclusive = min, .end_inclusive = unbounded};

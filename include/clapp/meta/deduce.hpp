@@ -20,6 +20,11 @@
 #include <cstdlib>
 #include <deque>
 #include <optional>
+#include <set>
+#include <unordered_set>
+#include <tuple>
+#include <string>
+#include <clapp/lex/os_str.hpp>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -71,6 +76,7 @@ namespace clapp {
         fixed_array,
         /** `std::pair<A, B>` — `set`, exactly 2 values, required unless defaulted. */
         pair,
+        tuple,
         /**
          * An enumeration. `set`, 1 value, required unless defaulted, and its
          * possible values come from `enumerators_of` with no opt-in — see
@@ -115,6 +121,7 @@ namespace clapp {
         fixed,
         /** Parse exactly two values, one per `std::pair` element type. */
         pair,
+        tuple,
     };
 
     /**
@@ -138,6 +145,7 @@ namespace clapp {
         case field_shape::sequence:
         case field_shape::optional_sequence:
         case field_shape::fixed_array:
+        case field_shape::tuple:
         case field_shape::pair:
         case field_shape::enumeration:
             return true;
@@ -189,6 +197,8 @@ namespace clapp {
             return store_kind::optional_many;
         case field_shape::fixed_array:
             return store_kind::fixed;
+        case field_shape::tuple:
+            return store_kind::tuple;
         case field_shape::pair:
             return store_kind::pair;
         }
@@ -228,6 +238,8 @@ namespace clapp {
             return "optional-sequence";
         case field_shape::fixed_array:
             return "fixed-array";
+        case field_shape::tuple:
+            return "tuple";
         case field_shape::pair:
             return "pair";
         case field_shape::enumeration:
@@ -269,6 +281,8 @@ namespace clapp {
             return "optional-many";
         case store_kind::fixed:
             return "fixed";
+        case store_kind::tuple:
+            return "tuple";
         case store_kind::pair:
             return "pair";
         }
@@ -392,7 +406,8 @@ namespace clapp {
          *         containers named in the deduction table.
          */
         [[nodiscard]] consteval bool is_sequence(std::meta::info type) {
-            return is_vector(type) || is_deque(type);
+            return is_vector(type) || is_deque(type) || is_specialization_of(type, ^^std::set) ||
+                   is_specialization_of(type, ^^std::unordered_set);
         }
 
         /**
@@ -406,6 +421,16 @@ namespace clapp {
         /** \brief Whether \p type is `std::pair<A, B>`. */
         [[nodiscard]] consteval bool is_pair(std::meta::info type) {
             return is_specialization_of(type, ^^std::pair);
+        }
+
+        [[nodiscard]] consteval bool is_tuple(std::meta::info type) {
+            return is_specialization_of(type, ^^std::tuple);
+        }
+        [[nodiscard]] consteval std::vector<std::meta::info> tuple_types_of(std::meta::info type) {
+            std::vector<std::meta::info> out;
+            for (auto item : std::meta::template_arguments_of(canonical_type(type)))
+                out.push_back(canonical_type(item));
+            return out;
         }
 
         /** \brief Whether \p type is `std::variant<...>`. */
@@ -470,6 +495,22 @@ namespace clapp {
             return {canonical_type(args[0]), canonical_type(args[1])};
         }
 
+        /** Return 1 for a vector payload, 2 for name plus vector, or 0 if invalid. */
+        [[nodiscard]] consteval unsigned external_subcommand_shape(std::meta::info type) {
+            if (!std::meta::is_class_type(type)) return 0;
+            std::vector<std::meta::info> fields;
+            for (auto field : std::meta::nonstatic_data_members_of(type, std::meta::access_context::current())) {
+                if (!has_annotation<skip>(field)) fields.push_back(canonical_type(std::meta::type_of(field)));
+            }
+            if (fields.empty() || fields.size() > 2) return 0;
+            auto payload = fields.back();
+            if (!is_vector(payload)) return 0;
+            auto elem = sole_type_argument(payload);
+            if (elem != canonical_type(^^std::string) && elem != canonical_type(^^os_string)) return 0;
+            if (fields.size() == 1) return 1;
+            return fields[0] == canonical_type(^^std::string) || fields[0] == canonical_type(^^os_string) ? 2 : 0;
+        }
+
         // =====================================================================
         // Classification
         // =====================================================================
@@ -500,6 +541,7 @@ namespace clapp {
             if (is_sequence(canonical)) return field_shape::sequence;
             if (is_fixed_array(canonical)) return field_shape::fixed_array;
             if (is_pair(canonical)) return field_shape::pair;
+            if (is_tuple(canonical)) return field_shape::tuple;
             if (is_variant(canonical)) return field_shape::subcommand_set;
 
             return field_shape::scalar;
@@ -511,7 +553,7 @@ namespace clapp {
          * Precedence: `skip` > `flatten` > type. `subcommand` only validates.
          * \param member Non-static data member reflection.
          * \return Includes annotation-dependent skipped/flattened/counter.
-         * \warning Invalid `[[= subcommand{}]]` placement aborts constant evaluation.
+         * \note Invalid subcommand placement is diagnosed by check_fields_parsable.
          * \note Counter needs `.act = count` on a countable type. `from_global` and
          *       `external_subcommand` do not change shape (handled above).
          */
@@ -524,7 +566,7 @@ namespace clapp {
 
             if (has_annotation<subcommand>(member) && shape != field_shape::subcommand_set &&
                 shape != field_shape::optional_subcommand_set) {
-                std::abort();
+                return shape;
             }
 
             if (shape == field_shape::scalar && is_countable(type) &&
@@ -562,9 +604,6 @@ namespace clapp {
          * \param has_member_initializer See `has_member_initializer()`.
          * \param num_args_override Explicit arity, or `infer()`.
          * \return Fully resolved `deduced_arg`.
-         * \warning **Arity override is not in the annotation DSL yet** — `arg_attr`
-         *          has no `num_args`; `deduce_member` always passes `infer()`.
-         *          Explicit-wins holds for `.act`/`.required`, not arity, for now.
          * \note Defaults from annotation or member initializer clear `required`.
          * \warning `cstr` cannot tell absent from empty: `.default_value = ""`
          *          does **not** clear `required`. Use a member initializer instead.
@@ -579,7 +618,7 @@ namespace clapp {
             result.shape = shape;
             result.store = store_for(shape);
             result.arity = shape == field_shape::pair          ? std::size_t{2}
-                           : shape == field_shape::fixed_array ? arity
+                           : (shape == field_shape::fixed_array || shape == field_shape::tuple) ? arity
                                                                : std::size_t{0};
 
             if (!clapp::is_argument(shape)) {
@@ -632,6 +671,11 @@ namespace clapp {
                 row_range    = value_range::exactly(result.arity);
                 row_required = true;
                 break;
+            case field_shape::tuple:
+                row_act = arg_action::set;
+                row_range = value_range::exactly(result.arity);
+                row_required = true;
+                break;
             case field_shape::pair:
                 row_act      = arg_action::set;
                 row_range    = value_range::exactly(2);
@@ -672,17 +716,19 @@ namespace clapp {
          * \param member Non-static data member reflection.
          * \return Fully resolved `deduced_arg`.
          * \throws Whatever `shape_of` throws.
-         * \note No arity override — `arg_attr` has no `num_args` yet (see `deduce`).
+         * \note An explicit arg_attr::num_args overrides the deduced arity.
          */
         [[nodiscard]] consteval deduced_arg deduce_member(std::meta::info member) {
             const field_shape shape    = shape_of(member);
             const std::meta::info type = std::meta::type_of(member);
 
             const std::size_t arity =
-                    shape == field_shape::fixed_array ? array_extent_of(type) : std::size_t{0};
+                    shape == field_shape::fixed_array ? array_extent_of(type)
+                    : shape == field_shape::tuple ? tuple_types_of(type).size() : std::size_t{0};
 
             return deduce(
-                    shape, arity, annotation_or<arg_attr>(member), has_member_initializer(member));
+                    shape, arity, annotation_or<arg_attr>(member), has_member_initializer(member),
+                    annotation_or<arg_attr>(member).num_args);
         }
 
         /**
@@ -703,7 +749,7 @@ namespace clapp {
             if (shape == field_shape::optional_optional_scalar ||
                 shape == field_shape::optional_sequence)
                 return sole_type_argument(sole_type_argument(type));
-            if (shape == field_shape::pair) std::abort();
+            if (shape == field_shape::pair || shape == field_shape::tuple) std::abort();
             if (shape == field_shape::subcommand_set ||
                 shape == field_shape::optional_subcommand_set)
                 std::abort();

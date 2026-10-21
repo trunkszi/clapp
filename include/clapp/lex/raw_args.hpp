@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <clapp/error/error.hpp>
 #include <clapp/lex/os_str.hpp>
 #include <clapp/lex/parsed_arg.hpp>
 
@@ -14,6 +15,10 @@
 #include <concepts>
 #include <cstddef>
 #include <initializer_list>
+#include <expected>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -322,6 +327,23 @@ namespace clapp {
                      std::ranges::to<std::vector<os_string>>();
         }
 
+#if defined(_WIN32)
+        /** \brief Accept narrow main argv as UTF-8 bytes, including on Windows. */
+        constexpr raw_args(int argc, const char* const* argv) {
+            if (argc <= 0 || argv == nullptr) return;
+            for (int index = 0; index < argc; ++index)
+                items_.emplace_back(argv[index] == nullptr ? "" : argv[index]);
+        }
+#endif
+
+        /**
+         * \brief Expand quoted @response files.
+         * Nested paths are relative to the containing file; at most sixteen files may nest.
+         * A # outside quotes starts a comment, and backslash escapes the next byte.
+         */
+        [[nodiscard]] std::expected<raw_args, error>
+        expand_response_files(char prefix = '@') const;
+
         /**
          * \brief Command line of the running process (argv[0] first).
          * \return Arguments; empty on unsupported platforms.
@@ -512,5 +534,99 @@ namespace clapp {
     private:
         std::vector<os_string> items_;
     };
+
+    inline std::expected<raw_args, error> raw_args::expand_response_files(char prefix) const {
+        if (std::ranges::none_of(items_, [prefix](const os_string& item) {
+                const auto bytes = item.view().chars();
+                return bytes.size() > 1 && bytes.front() == prefix;
+            })) return *this;
+        raw_args expanded;
+        std::vector<std::filesystem::path> active;
+        const auto failure = [](std::string message) -> std::expected<void, error> {
+            return std::unexpected(error::io(cow_str{std::move(message)}));
+        };
+        const auto expand = [&](auto&& self, os_str argument, const std::filesystem::path& base)
+                -> std::expected<void, error> {
+            const auto bytes = argument.chars();
+            if (bytes.size() <= 1 || bytes.front() != prefix) {
+                expanded.items_.emplace_back(argument);
+                return {};
+            }
+            if (active.size() >= 16) return failure("response file nesting exceeds 16");
+            std::filesystem::path path{os_str{bytes.substr(1)}.to_native()};
+            if (path.is_relative()) path = base / path;
+            std::error_code ec;
+            const auto resolved = std::filesystem::weakly_canonical(path, ec);
+            if (ec) return failure("cannot resolve response file: " + path.string());
+            if (std::ranges::find(active, resolved) != active.end())
+                return failure("response file cycle: " + path.string());
+            std::ifstream input(path, std::ios::binary);
+            if (!input) return failure("cannot open response file: " + path.string());
+            const std::string contents{std::istreambuf_iterator<char>{input},
+                                       std::istreambuf_iterator<char>{}};
+            if (input.bad()) return failure("cannot read response file: " + path.string());
+            active.push_back(resolved);
+            std::string token;
+            bool started = false;
+            bool escaped = false;
+            bool comment = false;
+            char quote = '\0';
+            const auto flush = [&]() -> std::expected<void, error> {
+                if (!started) return {};
+                auto outcome = self(self, os_str{token}, resolved.parent_path());
+                token.clear();
+                started = false;
+                return outcome;
+            };
+            for (const char byte : contents) {
+                if (byte == '\0') return failure("NUL byte in response file: " + path.string());
+                if (comment) {
+                    if (byte == '\n') comment = false;
+                    continue;
+                }
+                if (escaped) {
+                    token.push_back(byte);
+                    escaped = false;
+                    continue;
+                }
+                if (byte == '\\') {
+                    escaped = true;
+                    started = true;
+                    continue;
+                }
+                if (quote != '\0') {
+                    if (byte == quote) quote = '\0';
+                    else token.push_back(byte);
+                    continue;
+                }
+                if (byte == '\'' || byte == '"') {
+                    quote = byte;
+                    started = true;
+                } else if (byte == '#') {
+                    if (auto result = flush(); !result) return result;
+                    comment = true;
+                } else if (byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' ||
+                           byte == '\v' || byte == '\f') {
+                    if (auto result = flush(); !result) return result;
+                } else {
+                    token.push_back(byte);
+                    started = true;
+                }
+            }
+            if (quote != '\0' || escaped)
+                return failure("unterminated quote or escape in response file: " + path.string());
+            if (auto result = flush(); !result) return result;
+            active.pop_back();
+            return {};
+        };
+        std::error_code ec;
+        const auto base = std::filesystem::current_path(ec);
+        if (ec) return std::unexpected(error::io(cow_str::borrowed("cannot read current directory")));
+        for (std::size_t index = 0; index < items_.size(); ++index) {
+            if (auto result = expand(expand, items_[index].view(), base); !result)
+                return std::unexpected(std::move(result.error()));
+        }
+        return expanded;
+    }
 
 }  // namespace clapp
